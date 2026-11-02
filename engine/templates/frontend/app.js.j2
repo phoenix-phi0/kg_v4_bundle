@@ -1,0 +1,1581 @@
+<% from "layout.j2" import 节点 with context %>
+{#- 这几个默认值是必需的：StrictUndefined 开着，没走某条路的调用方
+    会直接报 undefined 而不是静默渲染成空。 -#}
+<% set has_shared_state = has_shared_state if has_shared_state is defined else false %>
+<% set has_endpoints = has_endpoints if has_endpoints is defined else false %>
+<% set has_to_actions = has_to_actions if has_to_actions is defined else false %>
+<% set has_goto = has_goto if has_goto is defined else false %>
+<% set has_overlays = has_overlays if has_overlays is defined else false %>
+<% set has_enter = has_enter if has_enter is defined else false %>
+<% if shared_json is not defined %><% set shared_json = "{}" %><% endif %>
+<% if endpoints_json is not defined %><% set endpoints_json = "{}" %><% endif %>
+<% if clears_json is not defined %><% set clears_json = "{}" %><% endif %>
+{#- 科目切换器（顶栏下拉）：项目声明了动作 subject_switch（远程端点里有它）且开着 auth_me
+    才生成。没声明的项目（现有的 kg、kg_v4）一行相关代码都不生成。 -#}
+<% set has_subject_switch = (has_me is defined and has_me and '"subject_switch"' in endpoints_json) %>
+<% if echoes_json is not defined %><% set echoes_json = "{}" %><% endif %>
+<% if screen_streams_json is not defined %><% set screen_streams_json = "{}" %><% endif %>
+<% if file_fields_json is not defined %><% set file_fields_json = "{}" %><% endif %>
+<% if lists_init_json is not defined %><% set lists_init_json = "{}" %><% endif %>
+<% if loaders_json is not defined %><% set loaders_json = "{}" %><% endif %>
+<% if overlay_loaders_json is not defined %><% set overlay_loaders_json = "{}" %><% endif %>
+<% if triggers_json is not defined %><% set triggers_json = "{}" %><% endif %>
+<% if enter_json is not defined %><% set enter_json = "{}" %><% endif %>
+<% if nav_json is not defined %><% set nav_json = "[]" %><% endif %>
+<% if page_json is not defined %><% set page_json = '{"end": "", "main": true, "role": "", "badge": "", "ends": {}, "home": null, "elsewhere": {}}' %><% endif %>
+<% set nav = nav if nav is defined else false %>
+<% set nav_sides = nav_sides if nav_sides is defined else [] %>
+<% set has_poll = has_poll if has_poll is defined else false %>
+<% set has_row_remote = has_row_remote if has_row_remote is defined else false %>
+<% set has_msg_actions = has_msg_actions if has_msg_actions is defined else false %>
+<% if stream_actions_json is not defined %><% set stream_actions_json = "{}" %><% endif %>
+<% set nav_logout = nav_logout if nav_logout is defined else false %>
+<% set has_me = has_me if has_me is defined else false %>
+<% set has_logout = has_logout if has_logout is defined else false %>
+<% set has_files = file_fields_json != "{}" %>
+<% set has_graphs = has_graphs if has_graphs is defined else false %>
+<% set i18n_langs = i18n_langs if i18n_langs is defined else [] %>
+<% set has_lang_switch = has_lang_switch if has_lang_switch is defined else false %>
+const { createApp, ref, computed } = Vue;
+const screens = <%= screens_json %>;
+{#- 每个界面一份表单状态，按界面名索引。共用一个对象会让同名字段串味，
+    切界面也会残留上一个界面填过的值。浮层里的字段也在这里——浮层属于
+    它所在的界面。文件字段不在这里，见下面的 files。 -#}
+const blank = <%= form_defaults_json %>;
+// 动作名 -> 提交成功后要清空的字段路径（.ui 里标了「清空」的动作）。
+// 旧版发完消息会立刻清空输入框；这是那条行为的一般化，范围限定在动作
+// 所在的那个容器，免得把练习页的课程、考点选择也一起抹掉。
+const clears = <%= clears_json %>;
+// 动作名 -> 发请求前要本地回显进消息流的字段路径（.ui 里标了「回显」）。
+// 旧版发消息时先 add('你', text) 再发请求，自己说的话立刻出现；等后端
+// 回传的话，接真模型要等好几秒，中间只有一个「…」。
+// 注意：标了回显就别让后端再回一遍同样的内容，否则会出现两条。
+const echoes = <%= echoes_json %>;
+// 界面名 -> 这个界面的消息流。回显、占位、后端返回都要落到当前界面那条。
+// 早先这三处都用全局第一条流：在练习页提交时，占位「…」被塞进对话页的
+// chat，而后端返回 stream:"drill" 把真消息放进 drill——占位永远留在 chat
+// 里清不掉，练习页什么都看不见。跟 submit_action 当初那个 bug 同形：
+// 全局取第一个，换了界面就打到别人身上，而且不报错。
+const screenStream = <%= screen_streams_json %>;
+// 动作名 -> 界面名，标了「进入时」的动作：每次进入那个界面自动跑一次，
+// 打开就有数据，不用先点一下刷新。
+const enterActions = <%= enter_json %>;
+// 界面名 -> 带着地址参数进来时用哪个接口把记录拉回来（.ui 里的「载入」）
+const loaders = <%= loaders_json %>;
+// 浮层名 -> 同上，浮层上的「载入」
+const overlayLoaders = <%= overlay_loaders_json %>;
+// 界面名 -> 带着地址参数进来时跑一次的动作（.ui 里的「触发」）
+const triggers = <%= triggers_json %>;
+// 这一页是哪一端。界面写了不同的「端」时，引擎按端拆成几个页面、各一个地址
+// （学生 /、教师 /teacher，见 gen/project.py 的 split_pages），每页只有自己那
+// 一端的界面：
+//   end        这一页的端；main 是不是主页面（/）
+//   badge      顶栏最前面的标识（「教师端」），role 是页面代号（nav-role-<代号>）
+//   ends       {端名或角色代号: 地址}：登录的人是别的端的，往哪儿送
+//   home       非主页面顶栏上「打开学生端」的链接
+//   elsewhere  {界面名: 端名}：别的页面上的界面，地址里打了它不进、提示在哪一端
+// 没拆的应用 end 是空串、ends 是空的，下面这些一概不起作用。
+const PAGE = <%= page_json %>;
+// 顶部导航：[{label, target, group}]。group 是同属一个实体的几个界面名，
+// 在其中任何一个上时那一项高亮。由项目编译时算好传进来。
+const nav = <%= nav_json %>;
+<% if has_files %>
+// 界面名 -> 该界面的文件字段。有文件的界面提交走 FormData，没有的发 JSON。
+const fileFields = <%= file_fields_json %>;
+<% endif %>
+<% if has_endpoints %>
+// 动作名 -> 后端端点。这个常量之前漏了声明，onAction 里裸引用直接
+// ReferenceError；submitTo 里当时的 typeof 守卫更糟——不报错，只是永远
+// 走 fallback，看着像"后端没接上"而不是"代码有 bug"。
+const endpoints = <%= endpoints_json %>;
+// 一个请求最多等多久（毫秒），见 postTo
+const FETCH_TIMEOUT_MS = 240000;
+<% endif %>
+
+const _app = createApp({
+  setup() {
+    // 地址：#界面名?参数=值。界面名用 encodeURIComponent 编过（名字里的
+    // 「?」会变成 %3F），所以裸的「?」一定是分隔符。
+    //   #笔记列表?浮层=笔记&id=5   刷新、把地址发给别人，都还知道是哪一条
+    function parseHash() {
+      const raw = location.hash.replace(/^#\/?/, "");
+      const cut = raw.indexOf("?");
+      const name = decodeURIComponent(cut < 0 ? raw : raw.slice(0, cut));
+      const params = cut < 0 ? {} : Object.fromEntries(new URLSearchParams(raw.slice(cut + 1)));
+      return [name || screens[0].name, params];
+    }
+    const route = ref(parseHash()[0]);
+    const params = ref(parseHash()[1]);
+    const forms = ref(JSON.parse(JSON.stringify(blank)));
+    // 表格数据，按列表的数据键分开存（数据键默认是表名，「绑」能另指一个）。
+    // 接口用 lists 按键给：{"prereq": …, "children": …}。
+    //
+    // 早先是一个全局的 rows，一个界面就只能有一张表——「知识点全貌」那种
+    // 要同时显示前置、后续、挂着的词的页面根本做不了。
+    //
+    // 初值是编译时塞的示例数据，给没有后端的预览用。
+    const lists = ref(<%= lists_init_json %>);
+    // 列表的数据：先看后端返回的 lists 里这个键有没有数据；没有就把键当成共享
+    // 状态的路径去读。节点图详情浮层里的「列表 包含 绑 sel.points」读的就是
+    // 选中节点身上的数组——那份数据跟着节点来，不走 lists。
+    // lists 优先：两边都有时，接口明确给的那份算数。
+    const rowsOf = name => {
+      const v = lists.value[name];
+      if (v && v.length) return v;
+      if (typeof shared !== 'undefined') {
+        const w = name.split('.').reduce((o, k) => (o == null ? o : o[k]), shared.value);
+        if (Array.isArray(w)) return w;
+      }
+      return v || [];
+    };
+    // 请求期间禁用提交按钮：旧版有 send.disabled，少了它连点会重复发。
+    //
+    // 按界面记（界面名 -> 正在请求的动作名），busy / pending 只看当前界面。
+    // 早先全站一个开关：做题页「请老师总结」要等十几秒，这段时间切到问老师，
+    // 发送按钮是灰的、按 Enter 没反应，整个站看着像卡住了（用户反馈过）。
+    const inflight = ref({});
+    const busy = computed(() => !!inflight.value[current.value.name]);
+    // 正在请求的是哪个动作（没有就是空串）。慢的接口（调模型的）在 .ui 里
+    // 按它显示等待的话：文案 当 pending==='quiz_summary' 老师正在看…
+    // 只看 busy 的话，同一处点别的按钮也会闪出那句话。
+    const pending = computed(() => inflight.value[current.value.name] || "");
+    // 界面底部的一条提示，几秒后自己消失，点一下也能关。给没有消息流的
+    // 界面用：保存成功、后端报错，总得让人看见。出错的留久一点。
+    //
+    // 放在所有条件块外面：下面的 return 无条件导出 notice，定义在
+    // has_endpoints 里的话，没有后端的界面（编辑器预览）直接白屏。
+    const notice = ref(null);
+    let noticeTimer = null;
+    function showNotice(text, kind) {
+      notice.value = { text: <% if i18n_langs %>tmsg(text)<% else %>String(text)<% endif %>, kind: kind || "ok" };
+      clearTimeout(noticeTimer);
+      noticeTimer = setTimeout(() => { notice.value = null; },
+                               kind === "no" ? 6000 : 2500);
+    }
+    // 登录。界面名「登录」「注册」是约定（gen auth 生成的就叫这两个）：
+    // 收到 401 时跳到「登录」，登录成功后回到被打断的那个界面。
+    const LOGIN = "登录";
+    // 「改密码」也算：登录之后才用得上的账号页，不进导航、不当首页
+    const AUTH_SCREENS = [LOGIN, "注册", "改密码"];
+    let afterLogin = "";
+    // 首页：第一个不是登录页、这个人又看得到的界面（多人模式下教师落在教师端
+    // 的第一页，见下面的 visible）。一个都看不到（学生的账号打开了教师端）就是
+    // 登录页——退回「第一个界面」的话它也看不到，guardSide 会来回跳
+    const firstAppScreen = () =>
+      (screens.find(s => !AUTH_SCREENS.includes(s.name) && !hiddenScreen(s.name))
+       || screens.find(s => s.name === LOGIN)
+       || screens.find(s => !AUTH_SCREENS.includes(s.name)) || screens[0]).name;
+    // 把一条记录填进某个界面的表单。列表点「编辑」、按地址参数「载入」
+    // 都走这里，类型转换只写一处。
+    //
+    // 按空白表单里那个字段的类型转：数据库里布尔存成 0/1，而勾选框的
+    // v-model 判断勾没勾用的是 String(值) === String(true)——"1" 不等于
+    // "true"，不转的话库里置顶的记录显示成没勾，而且不报错。
+    function fillForm(screen, record) {
+      if (!forms.value[screen]) forms.value[screen] = {};
+      const shape = blank[screen] || {};
+      for (const [k, v] of Object.entries(record)) {
+        forms.value[screen][k] = typeof shape[k] === "boolean"
+          ? (v === true || v === 1 || v === "1" || v === "true")
+          : v;
+      }
+    }
+    const current = computed(() => screens.find(s => s.name === route.value) || screens[0]);
+    // 模板里统一写 form.xxx，指向当前界面那一份。
+    const form = computed(() => forms.value[current.value.name] || {});
+    // 当前界面的消息流。没有就是没有（空串）：消息弹成底部的提示条。
+    //
+    // 早先没有流时退回全局第一条流。做题页没有消息流，达标喜报被塞进了
+    // 问老师的对话里——做题页上什么都看不见，问老师那边平白多出一条。
+    // 别的界面的流不归这个界面管，往里塞什么都是串台。
+    const myStream = () => screenStream[current.value.name] || "";
+<% if i18n_langs %>
+    // —— 界面多语言（可选声明）：项目里有 i18n/<lang>.tsv 才生成这一段。
+    // 词典在 web/i18n.<lang>.js（window.I18N），中文原文作键、整串匹配，
+    // 查不到的一律回退中文。只翻「提示性文字」：数据值（状态枚举、表格行）
+    // 不进词典，路由键（go('学情')）是 JS 字符串，根本不经过 DOM。
+    // 语言记在账号上（auth_me 的 lang / POST /account/lang），没登录时记在
+    // 浏览器（localStorage；没存过看 navigator.language，以 ja 开头 → 日文——
+    // 登录页就用它）。登录后 applyLang 以账号 lang 为准。
+    const i18nLang = ref((() => {
+      try {
+        const saved = localStorage.getItem("zs_i18n");
+        if (saved) return saved;
+      } catch (e) { /* 存不了就往下走 */ }
+      try { if ((navigator.language || "").toLowerCase().startsWith("ja")) return "ja"; } catch (e) { /* 没有 navigator 就中文 */ }
+      return "zh";
+    })());
+    function tmsg(s) {
+      const t = String(s == null ? "" : s);
+      if (i18nLang.value === "zh") return t;
+      return ((window.I18N || {})[i18nLang.value] || {})[t] || t;
+    }
+    function tdom() {
+      if (i18nLang.value === "zh") return;
+      const dict = (window.I18N || {})[i18nLang.value] || {};
+      const walk = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+<% if has_markdown %>        if (n.parentElement && n.parentElement.closest(".markdown code")) continue;
+<% endif %>        const v = n.nodeValue;
+        if (!v || !v.trim()) continue;
+        const t = dict[v.trim()];
+        if (t && t !== v.trim()) n.nodeValue = v.replace(v.trim(), t);
+      }
+      document.body.querySelectorAll("[placeholder],[title]").forEach(el => {
+        for (const a of ["placeholder", "title"]) {
+          const v = el.getAttribute(a);
+          if (!v || !v.trim()) continue;
+          const t = dict[v.trim()];
+          if (t && t !== v) el.setAttribute(a, v.replace(v.trim(), t));
+        }
+      });
+    }
+    // Vue 重渲染会把替换结果盖回中文（vdom patch）：MutationObserver 兜底
+    // 重跑，防抖 120ms；tdom 只改有变化的节点，不会触发自己无限循环。
+    let tdomTimer = null;
+    function scheduleTdom() {
+      if (i18nLang.value === "zh" || tdomTimer) return;
+      tdomTimer = setTimeout(() => { tdomTimer = null; tdom(); }, 120);
+    }
+    function applyLang(lg) {
+      lg = lg || "zh";
+      if (i18nLang.value !== lg) {
+        i18nLang.value = lg;
+        try { localStorage.setItem("zs_i18n", lg); } catch (e) { /* 存不了就算了 */ }
+      }
+      document.documentElement.lang = lg === "zh" ? "zh-CN" : lg;
+      if (lg !== "zh") tdom();
+    }
+    // 顶栏切换：写进账号（POST /account/lang，接口是项目声明的，没有就只切
+    // 本地），成功后整页刷新——界面文字、后端消息、<html lang> 一次到位。
+    async function switchLang(lg) {
+      if (i18nLang.value === lg) return;
+      try { localStorage.setItem("zs_i18n", lg); } catch (e) { /* 同上 */ }
+      if (me.value.user && typeof endpoints !== "undefined" && endpoints.account_lang) {
+        try {
+          const r = await postTo(endpoints.account_lang, { action: "account_lang", form: { lang: lg } });
+          if (r && r.error) { showNotice(tmsg(r.error), "no"); return; }
+        } catch (e) {
+          showNotice(tmsg("切换界面语言没成功，请稍后再试"), "no");
+          return;
+        }
+      }
+      location.reload();
+    }
+    Vue.onMounted(() => {
+      // 首屏就按该用的语言替换一遍；之后的中文由 MutationObserver 接住
+      applyLang(i18nLang.value);
+      new MutationObserver(scheduleTdom).observe(document.body,
+        { childList: true, subtree: true, characterData: true });
+    });
+<% endif %>
+<% if has_files %>
+    // 文件单独放这里，不进 form——form 要能 JSON 深拷贝（payload、snapshot
+    // 都靠它），而 File 对象走一遍 JSON 会变成 {}，静默丢失。
+    const files = ref({});
+    // 存 input 元素，清空时要连 DOM 里的文件名一起抹掉：光清 files 的话
+    // 界面上还显示着上次选的文件名，看着像没清干净。
+    const fileEls = {};
+    function setFileEl(name, el) { if (el) fileEls[name] = el; }
+
+    function pickFile(name, ev, maxsize) {
+      const picked = [...(ev.target.files || [])];
+      const limit = parseSize(maxsize);
+      if (limit) {
+        const tooBig = picked.find(f => f.size > limit);
+        if (tooBig) {
+          // 选完就拦，省得传上去才被拒。这只挡诚实的用户，后端还得再查。
+          alert(`${tooBig.name} 超过 ${maxsize}`);
+          ev.target.value = "";
+          return;
+        }
+      }
+      const box = files.value[current.value.name] || (files.value[current.value.name] = {});
+      box[name] = ev.target.multiple ? picked : (picked[0] || null);
+    }
+
+    // "5MB" / "500KB" / "1024" -> 字节数。认不出来就当没限制。
+    function parseSize(s) {
+      if (!s) return 0;
+      const m = String(s).trim().match(/^(\d+(?:\.\d+)?)\s*(B|KB|MB|GB)?$/i);
+      if (!m) return 0;
+      const unit = (m[2] || "B").toUpperCase();
+      return Number(m[1]) * ({B:1, KB:1024, MB:1048576, GB:1073741824}[unit] || 1);
+    }
+<% endif %>
+<% if has_overlays %>
+    // 当前打开的浮层名，null 表示没有。一次只开一个——真要叠加浮层的话
+    // 得改成栈，但那通常是设计出了问题，先不支持。
+    //
+    // 浮层开关放在地址里：#笔记列表?浮层=笔记&id=5。刷新后还开着（配合
+    // 浮层上的「载入」把记录拉回来）、编辑链接能分享、登录完能回到那一条，
+    // 浏览器后退键能关浮层——手机上大家就是这么关弹窗的。
+    //
+    // 早先是反过来的：地址一变就关浮层，浮层本身不进地址。
+    const openOverlay = ref(parseHash()[1]["浮层"] || null);
+    // keep：打开浮层时，地址里原有的参数留着——审阅页 #教材导入?job=3 上点
+    // 「删除这个任务」，确认浮层里的按钮提交时还得知道是哪个任务；关掉浮层也
+    // 回到 ?job=3，而不是光秃秃的界面。行上打开的（「带 id」）也一样留着，
+    // 这一行的参数盖在上面：学情的学生页 #学情?student=s1 上点一行设定的「编辑」，
+    // 地址是 ?student=s1&浮层=…&note_id=5，保存时接口知道是哪个学生的，关掉回到
+    // ?student=s1。原来没有参数的界面（#笔记列表）跟以前一样，关掉回到不带参数的。
+    let overlayBase = null;
+    function showOverlay(name, p, keep) {
+      const base = keep ? Object.fromEntries(
+        Object.entries(params.value || {}).filter(([k]) => k !== "浮层")) : null;
+      overlayBase = base && Object.keys(base).length ? base : null;
+      openOverlay.value = name;
+      go(route.value, Object.assign({}, overlayBase || {}, { "浮层": name }, p || {}));
+    }
+    function closeOverlay() {
+      openOverlay.value = null;
+      const base = overlayBase;
+      overlayBase = null;
+      if ((params.value || {})["浮层"]) go(route.value, base || undefined);
+    }
+    // Esc 关掉。浮层里的输入框正在打字时也该响应，所以挂在 window 上。
+    window.addEventListener("keydown", (ev) => {
+      if (ev.key === "Escape" && openOverlay.value) {
+        ev.preventDefault();
+        closeOverlay();
+      }
+    });
+    // 地址说了算：后退键把 ?浮层=… 去掉，浮层就关；切到别的界面，地址里
+    // 没有浮层参数，也就关了。直接读 parseHash 而不是 params——这个监听器
+    // 比更新 params 的那个注册得早，那时 params 还是旧的。
+    window.addEventListener("hashchange", () => {
+      openOverlay.value = parseHash()[1]["浮层"] || null;
+    });
+<% endif %>
+<% if has_shared_state %>
+    // 跨界面状态：「共享」字段、消息流、「显示」节点都读这里。
+    const shared = ref(<%= shared_json %>);
+    const streamEls = {};
+    function setStreamEl(name, el) { if (el) streamEls[name] = el; }
+    function pushMessages(name, arr) {
+      const list = shared.value[name] || (shared.value[name] = []);
+      list.push(...arr);
+      Vue.nextTick(() => { const el = streamEls[name]; if (el) el.scrollTop = el.scrollHeight; });
+    }
+<% if has_markdown %><% include "markdown.js.j2" %><% endif %>
+    function getPath(obj, path) {
+      return path.split(".").reduce((o, k) => (o == null ? o : o[k]), obj);
+    }
+<% endif %>
+    // 能不能当链接地址：只认站内 # 地址和 http(s)，别的（javascript: 之类、
+    // 空的）不画。「链接」和列的「地址」都用它。
+    function isHref(v) {
+      const s = v == null ? "" : String(v);
+      return s.startsWith("#") || s.startsWith("http://") || s.startsWith("https://");
+    }
+    // 链接真正的地址：「#教材?lesson=…」指的界面在别的页面上（教师端的导入报告
+    // 链到学生端的教材页）时，换成那个页面的地址（/#教材?lesson=…），新标签页
+    // 打开（targetOf）——不换的话这一页没有那个界面，点了被 guardSide 退回首页
+    function hrefOf(v) {
+      const s = v == null ? "" : String(v);
+      if (!s.startsWith("#")) return s;
+      const raw = s.slice(1);
+      const cut = raw.indexOf("?");
+      let name;
+      try { name = decodeURIComponent(cut < 0 ? raw : raw.slice(0, cut)); } catch (e) { return s; }
+      if (screens.some(x => x.name === name) || !elsewhere(name)) return s;
+      const there = PAGE.ends[PAGE.elsewhere[name]];
+      return there ? there + s : s;
+    }
+    const targetOf = v => (hrefOf(v) !== (v == null ? "" : String(v)) ? "_blank" : null);
+    function go(name, p) {
+      const q = p && Object.keys(p).length ? "?" + new URLSearchParams(p) : "";
+      route.value = name;
+      params.value = p || {};
+      location.hash = encodeURIComponent(name) + q;
+    }
+    function reset(name) {
+      forms.value[name] = JSON.parse(JSON.stringify(blank[name] || {}));
+    }
+    window.addEventListener("hashchange", () => {
+      [route.value, params.value] = parseHash();
+    });
+<% if has_endpoints %>
+    async function postTo(url, payload, withFiles) {
+<% if has_files %>
+      // 带文件时走 FormData：表单字段整个塞成一个 JSON 字符串，文件单独
+      // append。这样后端拿到的 form 还是同一个结构，返回约定一个字不用改。
+      // 不设 Content-Type——multipart 的 boundary 要让浏览器自己填。
+      if (withFiles) {
+        const fd = new FormData();
+        fd.append("payload", JSON.stringify(payload));
+        for (const [k, v] of Object.entries(withFiles)) {
+          if (Array.isArray(v)) v.forEach(f => fd.append(k, f));
+          else if (v) fd.append(k, v);
+        }
+        const r = await fetch(url, { method: "POST", body: fd });
+        return afterFetch(r);
+      }
+<% endif %>
+      // 等太久就放弃，给一句人话。早先 fetch 不设时限，服务器那头卡住时
+      // 按钮一直是灰的、页面一直转圈。后端调模型有自己的时限（CLI 90 秒，
+      // 超时换档位的 fallback），这里只兜「服务器整个没回」。带文件的不限：
+      // 上传大文件本来就可能慢
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), FETCH_TIMEOUT_MS);
+      try {
+        const r = await fetch(url, { method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload), signal: ctl.signal });
+        return await afterFetch(r);
+      } catch (e) {
+        if (e && e.name === "AbortError")
+          return { error: `等了 ${FETCH_TIMEOUT_MS / 1000} 秒服务器还没回应，过一会儿再试` };
+        throw e;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+    // 所有响应都经过这里：解析 JSON；401 就记住当前地址、跳到「登录」。
+    //
+    // 返回的不是 JSON（服务器炸了回了一页 HTML）时不抛，转成一个 error，
+    // 让提示条显示出来——早先 r.json() 直接抛，界面上什么都没有。
+    async function afterFetch(r) {
+      let data;
+      try {
+        data = await r.json();
+      } catch (e) {
+        data = { error: `服务器返回的不是 JSON（${r.status}）` };
+      }
+<% if has_me %>
+      if (r.status === 401) me.value = { ...NOBODY };
+<% endif %>
+      if (r.status === 401 && current.value.name !== LOGIN
+          && screens.some(s => s.name === LOGIN)) {
+        if (!AUTH_SCREENS.includes(current.value.name)) {
+          // 记整个地址而不只是界面名：#笔记列表?浮层=笔记&id=5 登录完要回到
+          // 那一条，只记界面名的话回来是个空界面
+          afterLogin = location.hash;
+        }
+        go(LOGIN);
+      }
+      return data;
+    }
+    // 后端返回这几个可选字段，都不必知道界面长什么样：
+    //   state     合并进跨界面状态
+    //   messages  追加到消息流
+    //   lists     {数据键: 行表}，按键填对应的表格
+    //   form      填进当前界面的表单（「载入」拉回记录时用）
+    //   error     出错的说明，弹提示条
+    //   go        换到哪个界面，「@来处」是登录前被打断的那个
+    //   stream    指定 messages 进哪条流，不给就进当前界面那条
+    //   overlay   开关浮层："名字" 弹出，null 收起
+    function applyResponse(resp) {
+      if (!resp) return;
+<% if i18n_langs %>
+      // 后端消息按当前语言替换（整串查词典，缺失回退中文）。数据（state、
+      // lists 里的行）不在这里翻——状态枚举被「当」条件比较，动了会出错。
+      if (Array.isArray(resp.messages)) {
+        resp.messages = resp.messages.map(m => Object.assign({}, m, { who: tmsg(m.who), text: tmsg(m.text) }));
+      }
+      if (resp.error) resp.error = tmsg(resp.error);
+<% endif %>
+      if (resp.state && typeof shared !== "undefined") Object.assign(shared.value, resp.state);
+      // 「页面状态」那类接口把整页铺进 state，列表数据键也在里面。rowsOf 能回退去读
+      // shared，但 .ui 里写的「当 lists.键&&lists.键.length」是直接读 lists 的——
+      // 不同步的话，表格外面那层 v-if 永远是假，接口有行、页面整块不出。
+      // 先同步、再让下面的 resp.lists 覆盖：两边都给时，lists 那份算数。
+      if (resp.state && typeof resp.state === "object") {
+        for (const [k, v] of Object.entries(resp.state)) {
+          if (Array.isArray(v)) lists.value[k] = v;
+        }
+      }
+      // lists：{数据键: 行表}。哪张表填哪组，由键说了算。
+      if (resp.lists && typeof resp.lists === "object") {
+        for (const [k, v] of Object.entries(resp.lists)) {
+          if (Array.isArray(v)) lists.value[k] = v;
+        }
+      }
+      // form：填进当前界面的表单。「载入」按地址参数拉回记录时用。
+      if (resp.form && typeof resp.form === "object" && !Array.isArray(resp.form)) {
+        fillForm(current.value.name, resp.form);
+      }
+<% if has_overlays %>
+      // 用 "overlay" in resp 而不是真值判断——null 是「关掉」，不是「没说」。
+      // 走 showOverlay / closeOverlay 而不是直接改变量：浮层开关在地址里，
+      // 只改变量的话地址对不上，刷新就不一样了。
+      if ("overlay" in resp) {
+        if (resp.overlay) showOverlay(resp.overlay);
+        else closeOverlay();
+      }
+<% endif %>
+      const target = resp.stream || myStream();
+      if (Array.isArray(resp.messages) && target && typeof pushMessages === "function") {
+        pushMessages(target, resp.messages);
+      } else if (Array.isArray(resp.messages) && resp.messages.length) {
+        // 这个界面没有消息流（表单、列表多半没有）。早先消息在这里被静默
+        // 丢掉：点保存成功了什么都不显示，人不知道到底存没存。
+        const m = resp.messages[resp.messages.length - 1];
+        showNotice(m.text, m.kind);
+      }
+      // 后端用「返回 {"error":…} 404」报错时，body 里只有 error。早先前端
+      // 既不看状态码也不认这个字段——点保存、失败了、界面毫无反应。
+      if (resp.error) {
+        const text = String(resp.error);
+        if (target && typeof pushMessages === "function") {
+          pushMessages(target, [{ who: "出错", text, kind: "no" }]);
+        } else {
+          showNotice(text, "no");
+        }
+      }
+<% if has_me %>
+      // 登录、退出都带 go 回来：换了人，顶栏的名字、能看的「侧」和「端」跟着换。
+      // 登录（「@来处」）先问清是谁再跳——不然教师登录后先进了学生的页面、发出
+      // 一串 403。别的 go（做题页换题、退出回登录页）照旧马上跳，顺手刷新一次
+      // 登进来的不是这一端的人：refreshMe 已经送走（去他那一端）或拒了，不再跳
+      if (resp.go === "@来处") {
+        refreshMe(true).then(off => { if (!off) followGo(resp.go); }).catch(() => {});
+        return;
+      }
+      if (resp.go) refreshMe().catch(() => {});
+<% endif %>
+      followGo(resp.go);
+    }
+    function followGo(target) {
+      // go：后端让前端换到哪个界面。「@来处」是登录前被打断的那个地址；那页
+      // 不是这个人这一端的（学生的页面上被弹去登录、登进来的是教师），就去
+      // 本端首页，不提示
+      if (target === "@来处") {
+        const back = afterLogin;
+        afterLogin = "";
+        const raw = back.replace(/^#\/?/, "");
+        const cut = raw.indexOf("?");
+        const name = decodeURIComponent(cut < 0 ? raw : raw.slice(0, cut));
+        if (back && !hiddenScreen(name)) location.hash = back;
+        else go(firstAppScreen());
+        return;
+      }
+      const resp = { go: target };
+      if (resp.go && screens.some(s => s.name === resp.go)) {
+        go(resp.go);
+      } else if (typeof resp.go === "string" && resp.go.startsWith("#")) {
+        // 「#界面?参数」：带着参数换过去（新建导入后跳到这个任务的审阅页
+        // #教材导入?job=3）。跟点链接一样走地址，「载入」照常把记录拉回来
+        const raw = resp.go.slice(1);
+        const cut = raw.indexOf("?");
+        const name = decodeURIComponent(cut < 0 ? raw : raw.slice(0, cut));
+        if (screens.some(s => s.name === name)) {
+          go(name, cut < 0 ? {} : Object.fromEntries(new URLSearchParams(raw.slice(cut + 1))));
+        }
+      }
+    }
+<% endif %>
+<% if has_me %>
+    // 现在是谁（auth_me）：{user, label, hide, role, role_label, badge}。开着登录
+    // 时顶栏显示名字、「改密码」和「退出」；看不到的界面（visible）不进导航，
+    // 地址直接打过去也退回本端首页：
+    //   hide   里的「侧」（学生的是「管理」）
+    //   role   界面写了「端 教师」「端 学生」的，只给这个角色（role 或 role_label
+    //          对得上）——多人模式下教师、学生各是一端，互相看不到
+    //   badge  顶栏最前面的标识（「教师端」），nav 加 class nav-role-<role>
+    // 这只是界面上藏起来——真正把关的是后端接口的「角色」「只许」（403）。
+    // 没开登录时 user 是空串：什么都不藏、不分端，顶栏什么都不多。
+    const NOBODY = { user: "", label: "", hide: [], role: "", roleLabel: "", badge: ""<% if has_subject_switch %>, subjects: [], subject: null<% endif %> };
+    const me = ref({ ...NOBODY });
+    // fresh：刚在这一页登录（登录接口回来的 @来处）。返回 true 表示这个人不是
+    // 这一页的端，已经送走或拒了（见 checkEnd）
+    async function refreshMe(fresh) {
+      try {
+        const r = await fetch(endpoints.auth_me, { method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "auth_me", form: {} }) });
+        const d = await r.json();
+        me.value = { user: d.user || "", label: d.label || d.user || "",
+                     hide: Array.isArray(d.hide) ? d.hide : [],
+                     role: d.role || "", roleLabel: d.role_label || "", badge: d.badge || ""<% if i18n_langs %>, lang: d.lang || "zh"<% endif %><% if has_subject_switch %>,
+                     // auth_me 多返回 subjects [{id,name}…] 和 subject（当前 id）时才有切换器
+                     subjects: Array.isArray(d.subjects) ? d.subjects : [],
+                     subject: d.subject === undefined ? null : d.subject<% endif %> };
+      } catch (e) {
+        me.value = { ...NOBODY };
+      }
+<% if i18n_langs %>
+      // 界面语言：已登录以账号里存的为准（auth_me 的 lang），没登录用浏览器记住的
+      applyLang(me.value.user ? (me.value.lang || i18nLang.value) : i18nLang.value);
+<% endif %>
+      if (await checkEnd(fresh)) return true;
+      guardSide();
+      return false;
+    }
+<% if has_subject_switch %>
+    // 顶栏下拉选了另一个科目：调项目声明的动作 subject_switch（参数 subject=<id>），成功后
+    // 整页 reload——地址 hash 还在，还是同一个界面，「进入时」动作、auth_me、列表都按新科目
+    // 重拉，不用逐项清状态（代价：当前界面没交的输入会丢）。失败则弹提示、下拉退回原值。
+    async function switchSubject(ev) {
+      const sel = ev.target;
+      const s = me.value.subjects.find(x => String(x.id) === sel.value);
+      const back = () => { sel.value = me.value.subject == null ? "" : String(me.value.subject); };
+      if (!s) { back(); return; }
+      let resp;
+      try {
+        resp = await postTo(endpoints.subject_switch, { action: "subject_switch", form: { subject: s.id } });
+      } catch (e) {
+        showNotice("切换科目失败，请稍后再试", "no");
+        back();
+        return;
+      }
+      if (!resp || resp.error) {
+        showNotice((resp && resp.error) || "切换科目失败", "no");
+        back();
+        return;
+      }
+      location.reload();
+    }
+<% endif %>
+    // 登录的人是别的端的（拆成几个页面时，见 PAGE）：
+    //   他那一端不是主页面（教师在 / 上）  送到他那一端（/teacher），先提示一句
+    //   他那一端是主页面（学生在 /teacher 上）  这一页不收：刚在这儿登录的退出、
+    //       回登录页说「这是教师端」；之前就登着的（别的标签页登的）不退，只回
+    //       登录页说清楚，换教师账号登就行
+    // 角色对不上任何一端的不管，照旧按 visible 藏界面。接口照样有「只许」把关。
+    async function checkEnd(fresh) {
+      const m = me.value;
+      if (!m.user || !PAGE.end) return false;
+      if (m.role === PAGE.end || m.roleLabel === PAGE.end) return false;
+      const there = PAGE.ends[m.roleLabel] || PAGE.ends[m.role];
+      if (!there) return false;
+      const theirs = m.roleLabel || m.role;
+      if (there !== "/") {
+        showNotice(`这是${PAGE.end || "主"}页面，${theirs}请用${theirs}端，正在打开 ${there}`, "no");
+        leaving = true;
+        leaveTo(there);
+        return true;
+      }
+      if (fresh) {
+        try {
+          await fetch(endpoints.auth_logout, { method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "auth_logout", form: {} }) });
+        } catch (e) { /* 退不掉也得拒：下面照样回登录页 */ }
+        me.value = { ...NOBODY };
+        go(LOGIN);
+        showNotice(`这是${PAGE.end}端，${theirs}账号不能在这里登录。请用${PAGE.end}账号；${theirs}请打开 ${there}`, "no");
+      } else {
+        go(LOGIN);
+        showNotice(`这是${PAGE.end}端，现在登录的是${theirs}账号（${m.label}）。请用${PAGE.end}账号登录；${theirs}请打开 ${there}`, "no");
+      }
+      return true;
+    }
+    // 要换页面了：这一页的第一个界面不再进（进了就是一串 403）
+    let leaving = false;
+    function leaveTo(url) { location.href = url; }
+<% if home_logout %>
+    // 「认证 换端 先退出」：顶栏「退出并打开学生端」先退出这个账号，再在本标签页打开
+    // 主页面（没登录的主页面就是登录页）。退不掉就留在这儿说一声：不然登着教师打开 /
+    // 又会被 checkEnd 送回来，看着像没反应
+    async function onHome(ev) {
+      ev.preventDefault();
+      let ok = false;
+      try {
+        const r = await fetch(endpoints.auth_logout, { method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "auth_logout", form: {} }) });
+        ok = r.ok;
+      } catch (e) { /* 下面统一提示 */ }
+      if (!ok) { showNotice("退出没成功，请稍后再试", "no"); return; }
+      me.value = { ...NOBODY };
+      leaving = true;
+      leaveTo(PAGE.home.path);
+    }
+<% endif %>
+    function visible(s) {
+      const m = me.value;
+      if (!m.user) return true;
+      if (s.side && m.hide.includes(s.side)) return false;
+      if (s.audience && s.audience !== m.role && s.audience !== m.roleLabel) return false;
+      return true;
+    }
+    function hiddenScreen(name) {
+      const s = screens.find(x => x.name === name);
+      return s ? !visible(s) : elsewhere(name);
+    }
+<% else %>
+    const visible = () => true;
+    function hiddenScreen(name) { return !screens.some(x => x.name === name) && elsewhere(name); }
+<% endif %>
+    // 别的页面（别的端）的界面：这一页根本没有它。地址里手打了也不进
+    function elsewhere(name) { return !!name && Object.prototype.hasOwnProperty.call(PAGE.elsewhere, name); }
+    function guardSide() {
+      if (!hiddenScreen(route.value)) return;
+      // 地址里明说了要这一页（直接打的、点的链接）才提示；空地址落在默认的
+      // 第一个界面上不算，悄悄换到本端首页
+      if (location.hash.replace(/^#\/?/, "")) {
+        const s = screens.find(x => x.name === route.value);
+        const end = s ? s.audience : PAGE.elsewhere[route.value];
+        const there = s ? "" : PAGE.ends[end];
+        showNotice(!s ? `「${route.value}」在${end}端${there ? `（${there}）` : ""}，这里打不开，已回到首页`
+                   : end ? `没有权限打开这个页面（${end}端的），已回到首页`
+                   : "没有权限打开这个页面", "no");
+      }
+      go(firstAppScreen());
+    }
+    window.addEventListener("hashchange", guardSide);
+<% if has_me %>
+    // 先知道是谁，再跑第一个界面的「进入时」（见文件末尾的 onRoute）
+    const meReady = refreshMe();
+<% else %>
+    guardSide();
+<% endif %>
+    function onSubmit() { console.log("submit", current.value.name, form.value); }
+<% if has_endpoints %>
+    async function onAction(name) {
+      const ep = endpoints[name];
+      if (ep) { applyResponse(await postTo(ep, { action: name, form: form.value })); return; }
+      console.log("action", name, form.value);
+    }
+<% else %>
+    function onAction(name) { console.log("action", name, form.value); }
+<% endif %>
+<% if has_endpoints or has_to_actions %>
+    // 把动作管辖的字段恢复成初始值。只动本界面 form 里的字段——「共享」
+    // 字段是跨界面状态，不该被一次提交抹掉。
+    function clearFields(name) {
+      const paths = clears[name];
+      if (!paths) return;
+      const state = forms.value[current.value.name];
+      const blankState = blank[current.value.name] || {};
+      for (const p of paths) {
+        const parts = p.split(".");
+        let node = state, src = blankState;
+        for (const k of parts.slice(0, -1)) {
+          node = node && node[k]; src = src && src[k];
+        }
+        const last = parts[parts.length - 1];
+        if (node) node[last] = (src && last in src) ? JSON.parse(JSON.stringify(src[last])) : "";
+      }
+<% if has_files %>
+      // 文件也要清：不清的话下次提交会把上次的再传一遍，而且界面上还
+      // 显示着旧文件名。DOM 那份必须单独抹——files 只是我们自己的记录，
+      // input 元素里的文件名是浏览器管的。
+      const mine = fileFields[current.value.name] || [];
+      for (const fname of mine) {
+        const box = files.value[current.value.name];
+        if (box) delete box[fname];
+        if (fileEls[fname]) fileEls[fname].value = "";
+      }
+<% endif %>
+      // 清空后高度要收回去，否则留着上一条消息撑开的高度
+      Vue.nextTick(() => {
+        document.querySelectorAll(".screen textarea")
+          .forEach(el => { el.style.height = "auto"; });
+      });
+    }
+
+    // 记下要清空的字段当前值，请求失败时还原——网络一断不该让人白打一段字。
+    // 文件不在此列：input[type=file] 的 value 不能用脚本设置（浏览器的
+    // 安全限制），失败后只能让用户重选。
+    function snapshot(name) {
+      const paths = clears[name] || [];
+      const state = forms.value[current.value.name] || {};
+      const saved = paths.map(p => [p, JSON.parse(JSON.stringify(
+        p.split(".").reduce((o, k) => (o == null ? o : o[k]), state) ?? ""))]);
+      return () => {
+        const st = forms.value[current.value.name];
+        for (const [p, v] of saved) {
+          const parts = p.split(".");
+          let node = st;
+          for (const k of parts.slice(0, -1)) node = node && node[k];
+          if (node) node[parts[parts.length - 1]] = v;
+        }
+      };
+    }
+
+    // 把这次提交的输入本地插进消息流，先于请求。
+    // 文件字段不在 form 里，所以这里天然跳过——往消息流插一个文件名
+    // 没什么意义。
+    function echoInput(name) {
+      const paths = echoes[name];
+      if (!paths || !paths.length) return;
+      const stream = myStream();
+      if (!stream) return;
+      const state = forms.value[current.value.name] || {};
+      const text = paths
+        .map(p => p.split(".").reduce((o, k) => (o == null ? o : o[k]), state))
+        .filter(v => v !== undefined && v !== null && String(v).trim() !== "")
+        .join("\n");
+      if (text) pushMessages(stream, [{ who: "你", text, kind: "user" }]);
+    }
+
+    // closeAfter：标了「远程 关闭」的动作传 true，请求成功后关掉浮层。
+    async function submitTo(name, closeAfter) {
+      // 记下发请求的界面：请求没回来就切走了，回来时清的还是这一个
+      const screen = current.value.name;
+      if (inflight.value[screen]) return;
+      inflight.value = { ...inflight.value, [screen]: name };
+      // 顺序照旧版：先本地回显、拷出要发的内容、清空输入框，然后才发请求。
+      // 清空必须在拷贝之后——反过来的话后端收到的是空表单。
+      // 也必须在请求之前——等回来再清的话，慢接口下那段字会在框里僵几秒。
+      echoInput(name);
+      const payload = JSON.parse(JSON.stringify(form.value));
+      // 地址里的参数（id、编号）说明正在改的是哪一条，以它为准，盖掉表单里
+      // 的同名键。主键是显式字段（比如编号）时，编辑浮层里它也是个输入框：
+      // 把 B1 的编号改成 B2 再保存，更新语句按主键找记录，就悄悄改到了 B2
+      // 头上，还回「已保存」。端到端测试实际撞上过。
+      for (const [k, v] of Object.entries(params.value || {})) {
+        if (k !== "浮层") payload[k] = v;
+      }
+<% if has_files %>
+      // 这次要一起发的文件。注意 clearFields 会清掉 files，所以要在它
+      // 之前把引用拿出来。
+      const myFiles = fileFields[current.value.name]
+        ? { ...(files.value[current.value.name] || {}) } : null;
+<% endif %>
+      const restore = snapshot(name);
+      clearFields(name);
+      // 乐观占位：先摆一条「…」，请求回来再换掉。没有这个的话，
+      // 慢的接口会让界面看起来像卡住了。
+      const stream = myStream();
+      let placeholder = null;
+      if (stream && shared.value[stream]) {
+        placeholder = { who: "", text: "…", kind: "pending" };
+        shared.value[stream].push(placeholder);
+      }
+      const drop = () => {
+        if (!placeholder) return;
+        const list = shared.value[stream] || [];
+        const i = list.indexOf(placeholder);
+        if (i >= 0) list.splice(i, 1);
+        placeholder = null;
+      };
+      try {
+        const r = await _submitTo(name, drop, payload<% if has_files %>, myFiles<% endif %>);
+<% if has_overlays %>
+        // 请求成功才关浮层：失败时留着，用户能看到错误、也能改了重试
+        if (closeAfter) closeOverlay();
+<% endif %>
+        return r;
+      } catch (e) {
+        drop();
+        restore();
+        // 没有消息流的界面弹提示条：网络断了、服务没起来，总得让人看见
+        if (stream) pushMessages(stream, [{who: "出错", text: String(e), kind: "no"}]);
+        else showNotice(String(e), "no");
+      } finally {
+        const { [screen]: _done, ...rest } = inflight.value;
+        inflight.value = rest;
+        // 焦点还给输入框，接着打字不用再点一下——旧版的 input.focus()
+        Vue.nextTick(() => {
+          const el = document.querySelector(".screen textarea");
+          if (el) el.focus();
+<% if has_enter %>
+          // 没有输入框了（判完、输入框收起），焦点给标了「回车」的按钮
+          else focusEnter();
+<% endif %>
+        });
+      }
+    }
+
+    async function _submitTo(name, drop, payload, withFiles) {
+      const ep = <% if has_endpoints %>endpoints[name]<% else %>null<% endif %>;
+      if (ep) {
+        const resp = await postTo(ep, { action: name, form: payload || form.value }, withFiles);
+        if (drop) drop();
+        applyResponse(resp);
+        return;
+      }
+      if (drop) drop();
+      console.log("submit", name, payload || form.value);
+    }
+<% endif %>
+    // 以下两样是所有界面通用的输入行为，不进 .ui 词汇表：
+    // 它们是「HTML 上的文本框该怎么用」，不是「界面上有什么」。
+    // 写进 .ui 就成了只有 HTML 目标认识的词。
+
+    // Enter 发送，Shift+Enter 换行。动作名由节点带过来，按容器就近取——
+    // 全局取第一个的话，浮层里按 Enter 会打到顶栏那个动作上，而且不报错。
+    function onKey(ev, actionName) {
+      if (ev.key !== "Enter" || ev.shiftKey) return;
+      // 输入法正在选字时的 Enter 是「确定这个词」，不是交——写日语时
+      // 敲完假名按 Enter 转汉字，不该把半截的答案交上去
+      if (ev.isComposing) return;
+      ev.preventDefault();
+      if (actionName && !busy.value) submitTo(actionName);
+    }
+
+<% if has_enter %>
+    // 「回车」动作（见 tools/ui.py）：答完出现的「下一题」。
+    // 按钮在 DOM 里就是该响应的时候——什么时候出现由「当」管。
+    function enterButton() {
+      const b = document.querySelector(".screen [data-enter]");
+      return b && !b.disabled ? b : null;
+    }
+    // 答完把焦点给它，并滚到看得见的地方（卡片自己会滚，长了按钮可能在下面）
+    function focusEnter() {
+      const b = enterButton();
+      if (!b) return;
+      b.focus();
+      if (typeof b.scrollIntoView === "function") b.scrollIntoView({ block: "nearest" });
+    }
+    // 按钮上的 Enter：自动重复不算——交答案那一下按住没放，连发的 Enter
+    // 会落到刚出现的这颗按钮上
+    function enterKey(ev) {
+      if (ev.repeat || ev.isComposing) return;
+      const b = ev.currentTarget;
+      if (b && !b.disabled) b.click();
+    }
+    // 焦点不在任何输入框、按钮、链接上时（点完选择题的选项，那颗按钮锁住了），
+    // Enter 也点它。别处已经处理过的（输入框里交答案的 Enter 会
+    // preventDefault）不再处理：一次 keydown 只做一件事。
+    window.addEventListener("keydown", (ev) => {
+      if (ev.key !== "Enter" || ev.shiftKey || ev.defaultPrevented || ev.repeat || ev.isComposing) return;
+      const t = ev.target;
+      if (t && t.closest && t.closest("input, textarea, select, button, a, [contenteditable]")) return;
+<% if has_overlays %>
+      if (openOverlay.value) return;
+<% endif %>
+      const b = enterButton();
+      if (!b) return;
+      ev.preventDefault();
+      b.click();
+    });
+
+<% endif %>
+    // textarea 跟着内容长高，到上限就滚动
+    function grow(ev) {
+      const el = ev.target;
+      el.style.height = "auto";
+      el.style.height = Math.min(el.scrollHeight, 180) + "px";
+    }
+
+<% if has_row_remote %>
+    // 列表行上的「远程 带 id」：把这一行的 id（「带」的那个键）交给接口——
+    // 草稿课的通过、驳回，失败块的重试。跟按钮一样锁住这个界面；地址参数
+    // 照样盖进去（审阅页的 job），行上带的那个键最后放，以它为准。
+    async function onRowRemote(name, row, carry) {
+      if (!row) return;
+      const screen = current.value.name;
+      if (inflight.value[screen]) return;
+      const payload = JSON.parse(JSON.stringify(form.value));
+      for (const [k, v] of Object.entries(params.value || {})) {
+        if (k !== "浮层") payload[k] = v;
+      }
+      if (carry && row[carry] != null) payload[carry] = row[carry];
+      inflight.value = { ...inflight.value, [screen]: name };
+      try {
+        const ep = typeof endpoints !== "undefined" ? endpoints[name] : null;
+        if (!ep) { console.log("row", name, row); return; }
+        const resp = await postTo(ep, { action: name, form: payload });
+        if (route.value === screen) applyResponse(resp);
+      } catch (e) {
+        showNotice(String(e), "no");
+      } finally {
+        const { [screen]: _done, ...rest } = inflight.value;
+        inflight.value = rest;
+      }
+    }
+<% endif %>
+<% if has_msg_actions %>
+    // 消息上的按钮（消息流「按钮 a,b」，见 tools/ui.py）。消息流名 -> 白名单：后端
+    // 回的 m.actions 里动作名不在这张表里的不画、点了也不发——消息里有模型写的
+    // 东西，不能回一个任意的动作名就把它调了。
+    const streamActions = <%= stream_actions_json %>;
+    function msgActions(stream, m) {
+      const allow = streamActions[stream] || [];
+      if (!m || !Array.isArray(m.actions)) return [];
+      return m.actions.filter(a => a && typeof a.action === "string" && allow.includes(a.action));
+    }
+    // 点了跟行上的「远程 带 id」一样：锁住这个界面，表单、地址参数照样带上，
+    // carry 最后合进去、以它为准（草稿的 id）。返回走 applyResponse，请求回来时
+    // 人已经切走了就不往别的界面上放。
+    async function onMsgAction(stream, a) {
+      if (!a || !(streamActions[stream] || []).includes(a.action)) return;
+      const screen = current.value.name;
+      if (inflight.value[screen]) return;
+      const ep = typeof endpoints !== "undefined" ? endpoints[a.action] : null;
+      if (!ep) { console.log("msg action", a.action, a.carry); return; }
+      const payload = JSON.parse(JSON.stringify(form.value));
+      for (const [k, v] of Object.entries(params.value || {})) {
+        if (k !== "浮层") payload[k] = v;
+      }
+      if (a.carry && typeof a.carry === "object" && !Array.isArray(a.carry)) {
+        Object.assign(payload, JSON.parse(JSON.stringify(a.carry)));
+      }
+      inflight.value = { ...inflight.value, [screen]: a.action };
+      try {
+        const resp = await postTo(ep, { action: a.action, form: payload });
+        if (route.value === screen) applyResponse(resp);
+      } catch (e) {
+        if (typeof pushMessages === "function") pushMessages(stream, [{ who: "出错", text: String(e), kind: "no" }]);
+        else showNotice(String(e), "no");
+      } finally {
+        const { [screen]: _done, ...rest } = inflight.value;
+        inflight.value = rest;
+      }
+    }
+<% endif %>
+<% if has_poll %>
+    // 「每隔 N」的动作：界面开着、「当」成立时由 <zs-poll> 定时调这里。悄悄
+    // 发——不锁按钮、不清输入框、不摆占位：人在这页上照常点别的，后台
+    // 任务的进度自己往前走。这个界面正有请求在路上就跳过这一拍，不叠着发。
+    // 请求回来时人已经切走了就不往别的界面上放。
+    async function pollOnce(name) {
+      const screen = current.value.name;
+      if (inflight.value[screen]) return;
+      const ep = typeof endpoints !== "undefined" ? endpoints[name] : null;
+      if (!ep) return;
+      const payload = JSON.parse(JSON.stringify(form.value));
+      for (const [k, v] of Object.entries(params.value || {})) {
+        if (k !== "浮层") payload[k] = v;
+      }
+      try {
+        const resp = await postTo(ep, { action: name, form: payload });
+        if (route.value === screen && !inflight.value[screen]) applyResponse(resp);
+      } catch (e) { /* 断一拍没关系，下一拍再来 */ }
+    }
+    Vue.provide("zsPoll", pollOnce);
+<% endif %>
+    function onRow(name, row, target, carry, opens) {
+      console.log("row", name, row);
+      if (!row) return;
+      const p = carry && row[carry] != null ? { [carry]: row[carry] } : null;
+      // 「打开 浮层」：浮层属于当前界面，记录也填进当前界面的表单。先清空
+      // 再填——上一次在浮层里编辑的那条留下的键（比如 id）不能混进来。
+      if (opens) {
+        reset(current.value.name);
+        fillForm(current.value.name, row);
+<% if has_overlays %>
+        showOverlay(opens, p, true);
+<% endif %>
+        return;
+      }
+      if (!target) return;
+      fillForm(target, row);
+      // 「带 id」：把这一行的 id 放进地址（#笔记编辑?id=5）。刷新、把地址
+      // 发给别人，都还知道是哪一条——配合目标界面的「载入」。
+      go(target, p);
+    }
+
+    // 「载入」：带着地址参数进来（#笔记列表?浮层=笔记&id=5），表单里又不是
+    // 那一条时，调界面（或浮层）声明的接口把记录拉回来。刷新、打开别人发来
+    // 的链接，表单都不再是空的。
+    //
+    // 从列表点「编辑」进来时表单已经是那一行了，参数对得上，不发请求。
+    // 要发的话先清空表单：请求回来之前不该还显示着上一条记录——那一刻点
+    // 保存，就把上一条的内容写到这一条上了。
+    //
+    // 返回发出去的那个动作名（没发就是 undefined），runTrigger 据此不再重复发。
+    let enterSeq = 0;
+    async function runLoader(name) {
+      const all = params.value || {};
+      const ov = all["浮层"];
+      const loader = (ov && overlayLoaders[ov]) || loaders[name];
+      // 地址里的「浮层」是开关，不是给接口的参数——不滤掉的话，拿它跟表单
+      // 比永远对不上，每次都会重新拉一遍
+      const p = Object.fromEntries(Object.entries(all).filter(([k]) => k !== "浮层"));
+      if (!loader || !Object.keys(p).length) return;
+      const ep = typeof endpoints !== "undefined" ? endpoints[loader] : null;
+      if (!ep) return;
+      const f = forms.value[name] || {};
+      if (Object.entries(p).every(([k, v]) => String(f[k] ?? "") === String(v))) return;
+      reset(name);
+      const seq = ++enterSeq;
+      const resp = await postTo(ep, { action: loader, form: p });
+      if (seq === enterSeq && route.value === name) applyResponse(resp);
+      return loader;
+    }
+
+    // 「触发」：带着地址参数进来（#问老师?lesson=hb-n5-046）时，把参数交给
+    // 界面声明的动作跑一次——教材页的「请老师讲解」就是这样把讲解请求发出去的。
+    //
+    // 跑之前先把参数从地址里去掉，用 replaceState 不留历史：
+    //   刷新        地址里没参数了，不会再发一次（每次都是一次模型调用）
+    //   后退        回到来的那页，不会回到带参数的地址又触发一次
+    //   之后的提交  提交时地址参数会盖进表单（见 submitTo），不清掉的话之后
+    //               每句话都带着这一课
+    // 跟提交一样锁住这个界面、在消息流里摆「…」；请求回来时人已经切走了就
+    // 不往别的界面上放（下次进来「进入时」会从库里拉回）。
+    //
+    // 地址里有「浮层」时参数不去掉：这时参数是浮层的（#科目管理?浮层=科目成员&subj_id=3），
+    // 界面级「触发」拿来给浮层补数据（从行上打开时「载入」看表单已是这条会跳过）。
+    // 去掉的话浮层的地址就没了，刷新浮层关掉、链接分享不了（K99c 实测）。这时
+    // 刷新再跑一次是对的——跟「载入」一样是把记录拉回来。
+    //
+    // loaded：runLoader 刚为同样的参数发过的动作。跟触发是同一个就不再发——
+    // 节点图「带 code」点开、带参刷新时，载入和触发都是它，原先一次发两遍。
+    async function runTrigger(name, loaded) {
+      const act = triggers[name];
+      const all = params.value || {};
+      const p = Object.fromEntries(Object.entries(all).filter(([k]) => k !== "浮层"));
+      if (!act || !Object.keys(p).length || act === loaded) return;
+      const ep = typeof endpoints !== "undefined" ? endpoints[act] : null;
+      if (!ep || inflight.value[name]) return;
+      if (!all["浮层"]) {
+        history.replaceState(null, "", "#" + encodeURIComponent(name));
+        params.value = {};
+      }
+      inflight.value = { ...inflight.value, [name]: act };
+      const stream = screenStream[name] || "";
+      let placeholder = null;
+      if (stream && shared.value[stream]) {
+        placeholder = { who: "", text: "…", kind: "pending" };
+        shared.value[stream].push(placeholder);
+      }
+      const drop = () => {
+        const list = (stream && shared.value[stream]) || [];
+        const i = placeholder ? list.indexOf(placeholder) : -1;
+        if (i >= 0) list.splice(i, 1);
+      };
+      try {
+        const resp = await postTo(ep, { action: act, form: p });
+        drop();
+        if (route.value === name) applyResponse(resp);
+      } catch (e) {
+        drop();
+        if (route.value === name) {
+          if (stream) pushMessages(stream, [{who: "出错", text: String(e), kind: "no"}]);
+          else showNotice(String(e), "no");
+        }
+      } finally {
+        const { [name]: _done, ...rest } = inflight.value;
+        inflight.value = rest;
+      }
+    }
+
+    // 进入一个界面时自动跑的动作（.ui 里标了「进入时」），打开就有数据。
+    //
+    // 切界面时上一个界面的数据不能留着：从笔记列表切到待办列表，请求回来
+    // 之前表格里还是笔记的行——那一刻点「编辑」，笔记那一行会被拷进待办的
+    // 编辑界面，保存就改掉 id 相同的那条待办。所以进入时先清空；而且只认
+    // 最后一次进入发出的请求，慢回来的旧响应不能盖掉新列表。
+    async function runEnter(name) {
+      const acts = enterActions[name] || [];
+      const remote = a => (typeof endpoints !== "undefined" ? endpoints[a] : null);
+      // **清空要在「载入」之前**：载入刚拉回来的详情（浮层里那几组）也在
+      // lists 里，放在后面清会把它们一起抹掉——地址带 code 打开浮层时，
+      // /node/one 的 point_words、items 拿到了又被 /node/list 之前的这句
+      // 清空干掉，浮层里几段全是空的。实际撞上过。
+      //
+      // 预览里没有后端，lists 是编译时塞的示例数据，清掉就什么都看不到了
+      if (acts.some(remote)) lists.value = {};
+      const loaded = await runLoader(name);
+      const seq = ++enterSeq;
+      for (const a of acts) {
+        const ep = remote(a);
+        if (!ep) { onAction(a); continue; }
+        const resp = await postTo(ep, { action: a, form: forms.value[name] || {} });
+        if (seq === enterSeq && route.value === name) applyResponse(resp);
+      }
+      // 「触发」排在「进入时」后面：先把页面原有的数据（问老师的历史对话）
+      // 拉回来，再在后面接上这次的请求和回复——反过来的话，「进入时」回来
+      // 整条替换消息流，刚放上去的回复就被盖掉了
+      if (seq === enterSeq && route.value === name) await runTrigger(name, loaded);
+    }
+
+    // 换了界面才跑「进入时」；同一个界面、只是地址参数变了（开关浮层、换
+    // 一条记录）只跑「载入」。浮层开关进了地址之后，每开一次浮层地址都会
+    // 变——不分开的话，每开一次浮层，后面的列表就被清空重拉一遍。
+    let entered = "";
+    function onRoute() {
+      if (route.value !== entered) {
+        entered = route.value;
+        runEnter(route.value);
+      } else {
+        runLoader(route.value).then(loaded => runTrigger(route.value, loaded));
+      }
+    }
+    window.addEventListener("hashchange", onRoute);
+<% if has_me %>
+    // 开着 auth_me 时等它回来再进第一个界面：教师打开首页时默认的第一个界面
+    // 是学生的，先跑它的「进入时」会白白收一串 403
+    meReady.then(() => { if (!leaving) onRoute(); });
+<% else %>
+    onRoute();
+<% endif %>
+<% if has_graphs %>
+    // 节点图：Vue Flow 画，dagre 排，游戏科技树的样子。只有这一种排布。
+    //   层   = 最长前置链步数。给每条边设 minlen = 两端步数之差，dagre 的网络单纯形
+    //          会让每条边都取到最短长度（那样总长最小），于是层恰好等于步数
+    //   卡片 = 150×52；层距 = 卡片高 + ranksep = 92（横向 190）
+    //   同层 = dagre 定先后（减少交叉），再挨着排、超过 8 张折行、每行居中
+    function _graphGet(obj, path) { return path.split('.').reduce((o, k) => (o == null ? o : o[k]), obj); }
+    function _graphPut(obj, path, value) { const parts = path.split('.'); let box = obj; for (const k of parts.slice(0, -1)) box = box[k] || (box[k] = {}); box[parts[parts.length - 1]] = value; }
+    // 卡片 150×52，横距 16、层距 40（层与层中心相距 92）。原先 180×64 / 40 / 64，
+    // 在 69 个点的真实图上卡片只占画面 6%，太散
+    const _KG = { BW: 150, BH: 52, NODESEP: 16, RANKSEP: 40, PAD: 40 };
+    // 状态图标：内联 SVG，不依赖图标字体
+    const _kgIcon = {
+      'kg-done': '<svg viewBox="0 0 16 16" width="14" height="14"><path d="M3 8.5l3 3 7-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+      'kg-open': '<svg viewBox="0 0 16 16" width="13" height="13"><path d="M9 1.5L3.5 9H8l-1 5.5L12.5 7H8z" fill="currentColor"/></svg>',
+      'kg-locked': '<svg viewBox="0 0 16 16" width="13" height="13"><rect x="3" y="7" width="10" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.5 7V5a2.5 2.5 0 015 0v2" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>',
+    };
+    const _kgEsc = t => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const _kgState = { done: 'kg-done', open: 'kg-open', locked: 'kg-locked', '掌握': 'kg-done', '可学': 'kg-open', '锁定': 'kg-locked' };
+    // 按路径各缓存一份：外面的大图和浮层里的小图同时在页面上，不能互相挤掉
+    const _graphCache = new Map();
+    function graphOf(path, dir, opts) {
+      opts = opts || {};
+      // 共享状态里没有就去 lists 里找：详情里的条目、词这些是后端按表格行给的
+      let raw0 = _graphGet(shared.value, path);
+      if (raw0 == null && typeof lists !== 'undefined') raw0 = (lists.value || {})[path];
+      // 也收纯数组：没有连线的一组知识点（比如详情浮层里的 sel.points）直接给数组，排成一层
+      let raw = Array.isArray(raw0) ? { nodes: raw0 } : (raw0 || {});
+      const center0 = opts.around ? _graphGet(shared.value, opts.around) : null;
+      const cid = center0 ? String(center0.id != null ? center0.id : center0.label) : '';
+      const key = (dir || '') + '|' + JSON.stringify(opts) + '|' + cid + '|' + JSON.stringify(raw);
+      const hit = _graphCache.get(path);
+      if (hit && hit.key === key) return hit.out;
+      const { BW, BH, NODESEP, RANKSEP, PAD } = _KG;
+      const lr = dir === '横向';
+      // 没给 id 的用 label 顶上：手写的子知识点通常只有 label
+      // 「标题 / 说明」：卡片的名字和说明行取哪个字段，逗号隔开取第一个有值的
+      const pick = (n, spec) => { for (const f of String(spec || '').split(',').filter(Boolean)) { if (n[f] != null && n[f] !== '') return String(n[f]); } return null; };
+      let src = (raw.nodes || []).map((n, i) => {
+        let m = n;
+        const t = opts.title ? pick(n, opts.title) : null;
+        if (t != null || opts.sub) {
+          m = Object.assign({}, n);
+          if (t != null) m.label = t;
+          if (opts.sub) {
+            const sv = String(opts.sub).split(',').filter(Boolean).map(f => n[f])
+              .filter(v => v != null && v !== '' && String(v) !== t).join('\u3000');
+            if (sv) m.sub = sv;
+          }
+        }
+        // 没给 id 的（条目、词这些）按位置编一个，名字可能重复。
+        //
+        // **id 一律转成字符串**：Vue Flow 要求 id 是 string，给数字它认不出
+        // 节点，框画得出来、里面却是空的。图节点的 id 是 code（字符串）所以
+        // 一直正常，而词、条目这些来自数据库的行，id 是自增的整数——浮层里
+        // 120 个词全是空白方块，就是这么来的。
+        return Object.assign({}, m, {
+          id: m.id != null ? String(m.id) : 'n' + i + ':' + (m.label != null ? m.label : '')
+        });
+      });
+      const K = n => String(n.id);
+      const byId = {}, pre = {}, con = {};
+      src.forEach(n => { byId[K(n)] = n; pre[K(n)] = []; con[K(n)] = []; });
+      (raw.edges || []).forEach(e => {
+        const a = String(e.from), b = String(e.to);
+        if (!(a in pre) || !(b in pre)) return;
+        if (e.kind === '对照') { con[a].push(b); con[b].push(a); }   // 对照不参与布局
+        else if (e.layout !== false) pre[b].push(a);
+      });
+      // 「围绕 sel」：只留选中点和它的直接前置、直接后续，只留跟它相连的边——
+      // 详情里的邻域图。层就成了 前置 / 当前 / 后续 三层
+      if (opts.around) {
+        if (!cid || !(cid in pre)) src = [];
+        else {
+          const ps = pre[cid].slice(), cs = src.filter(n => pre[K(n)].includes(cid)).map(K);
+          const keep = new Set([cid, ...ps, ...cs]);
+          src = src.filter(n => keep.has(K(n)));
+          Object.keys(pre).forEach(k => { pre[k] = keep.has(k) ? pre[k].filter(q => keep.has(q) && (k === cid || q === cid)) : []; });
+          Object.keys(con).forEach(k => { con[k] = []; });
+          raw = Object.assign({}, raw, { layerTitles: ps.length ? { 0: '直接前置', 1: '当前', 2: '直接后续' } : { 0: '当前', 1: '直接后续' } });
+        }
+      }
+      // 步数：最长前置链。环在导入时已被拒掉，seen 只防死循环
+      const depth = {};
+      const dep = (k, seen) => {
+        if (k in depth) return depth[k];
+        if (seen.has(k)) return 0;
+        seen.add(k);
+        let d = 0;
+        for (const p of pre[k]) d = Math.max(d, dep(p, seen) + 1);
+        seen.delete(k);
+        return (depth[k] = d);
+      };
+      src.forEach(n => dep(K(n), new Set()));
+
+      const pos = {};
+      const given = src.length > 0 && src.every(n => n.x != null && n.y != null);
+      if (given) {
+        src.forEach(n => { pos[K(n)] = { x: n.x + BW / 2, y: n.y + BH / 2 }; });
+      } else if (src.length > 6 && src.every(n => !pre[K(n)].length)) {
+        // 一组并列的东西（没有任何先后），多于 6 个排成网格，不拉成一长排
+        const C = 6;
+        src.forEach((n, i) => { pos[K(n)] = { x: (i % C) * (BW + NODESEP), y: Math.floor(i / C) * (BH + NODESEP) }; });
+      } else if (src.length && typeof dagre !== 'undefined') {
+        const g = new dagre.graphlib.Graph();
+        g.setDefaultEdgeLabel(() => ({}));
+        g.setGraph({ rankdir: lr ? 'LR' : 'TB', nodesep: NODESEP, ranksep: RANKSEP, edgesep: 8 });
+        src.forEach(n => g.setNode(K(n), { width: BW, height: BH }));
+        // 只拿跨一层的边去排。跨多层的边 dagre 会在经过的每一层塞一个占位点，每个
+        // 都占横向位置——真实图 112 条前置边里 35 条跨 2 层以上（最长 9 层），最宽
+        // 的一层只有 12 张卡片，却被撑到 7770px 宽。跨层边照样画，只是不参与排。
+        // 层不受影响：每个点都有一条从最深前置来的、正好跨一层的边，它决定这个点的层
+        src.forEach(n => pre[K(n)].forEach(p => { if (depth[K(n)] - depth[p] === 1) g.setEdge(p, K(n), { minlen: 1 }); }));
+        // 虚拟根连到所有第 0 步的节点：不连的话，互不相连的几块图 dagre 会各自上下
+        // 平移（平移不改变总边长），第 0 步就不在同一层了
+        const ROOT = '__kg_root__';
+        g.setNode(ROOT, { width: 1, height: 1 });
+        src.forEach(n => { if (depth[K(n)] === 0) g.setEdge(ROOT, K(n), { minlen: 1, weight: 1 }); });
+        dagre.layout(g);
+        src.forEach(n => { const v = g.node(K(n)); if (v) pos[K(n)] = { x: v.x, y: v.y }; });
+        // 压紧：每一层按 dagre 排出来的先后重新挨着放，超过 8 张折成几行，每行居中。
+        // dagre 负责分层和减少交叉，这一步只管紧凑——它为了上下对齐会在同层卡片之间
+        // 留空档，最宽的那层还会一字排开，左右都是空白
+        {
+          const MAXR = 8, SUBGAP = 16;
+          const along = lr ? 'x' : 'y', across = lr ? 'y' : 'x';
+          const stepA = lr ? BW + RANKSEP : BH + RANKSEP;   // 层与层
+          const stepC = lr ? BH + NODESEP : BW + NODESEP;   // 同一行相邻两张
+          const stepS = lr ? BW + SUBGAP : BH + SUBGAP;     // 同一层折出来的几行之间
+          const byL = new Map();
+          src.forEach(n => { if (!pos[K(n)]) return; const L = depth[K(n)]; if (!byL.has(L)) byL.set(L, []); byL.get(L).push(n); });
+          let cur = 0;
+          [...byL.keys()].sort((a, b) => a - b).forEach(L => {
+            const row = byL.get(L).sort((a, b) => pos[K(a)][across] - pos[K(b)][across]);
+            const lines = Math.ceil(row.length / MAXR), per = Math.ceil(row.length / lines);
+            for (let i = 0; i < lines; i++) {
+              const part = row.slice(i * per, (i + 1) * per);
+              const start = -(part.length - 1) * stepC / 2;
+              part.forEach((n, j) => { pos[K(n)] = { [across]: start + j * stepC, [along]: cur + i * stepS }; });
+            }
+            cur += (lines - 1) * stepS + stepA;
+          });
+        }
+      } else {
+        // dagre 没加载上（断网又没配本地文件）：退回按步数分层、同层依次排开
+        const seenAt = {};
+        src.forEach(n => { const d = depth[K(n)], i = (seenAt[d] = (seenAt[d] || 0) + 1) - 1;
+          pos[K(n)] = lr ? { x: d * (BW + RANKSEP), y: i * (BH + NODESEP) } : { x: i * (BW + NODESEP), y: d * (BH + RANKSEP) }; });
+      }
+
+      // 层带和「第 N 步」：按步数分组。纵向时是横条，横向时是竖条。只有一层（比如详情
+      // 里并列的一排子知识点）或节点自带坐标时不画
+      const nodes = [];
+      const steps = [...new Set(src.map(n => depth[K(n)]))].sort((a, b) => a - b);
+      if (!given && steps.length > 1) {
+        const all = src.map(n => pos[K(n)]).filter(Boolean);
+        const minX = Math.min(...all.map(c => c.x)) - BW / 2 - PAD, maxX = Math.max(...all.map(c => c.x)) + BW / 2 + PAD;
+        const minY = Math.min(...all.map(c => c.y)) - BH / 2 - PAD, maxY = Math.max(...all.map(c => c.y)) + BH / 2 + PAD;
+        const names = raw.layerNames || {};
+        steps.forEach(L => {
+          const at = src.filter(n => depth[K(n)] === L).map(n => pos[K(n)]).filter(Boolean);
+          if (!at.length) return;
+          // 邻域图的层只叫 直接前置 / 当前 / 直接后续，不带层号
+          const text = (raw.layerTitles || {})[L] != null ? raw.layerTitles[L] : (names[L] != null ? L + '\u3000' + names[L] : '第 ' + L + ' 步');
+          const box = lr
+            ? { x: Math.min(...at.map(c => c.x)) - BW / 2 - RANKSEP / 2, y: minY, w: Math.max(...at.map(c => c.x)) - Math.min(...at.map(c => c.x)) + BW + RANKSEP, h: maxY - minY }
+            : { x: minX, y: Math.min(...at.map(c => c.y)) - BH / 2 - RANKSEP / 2, w: maxX - minX, h: Math.max(...at.map(c => c.y)) - Math.min(...at.map(c => c.y)) + BH + RANKSEP };
+          // 放在最前面、zIndex -1：先画的在下面，连线和卡片都盖在它上面
+          nodes.push({
+            id: '__layer' + L, type: 'kglayer', position: { x: box.x, y: box.y },
+            selectable: false, draggable: false, focusable: false, connectable: false, zIndex: -1,
+            style: { width: box.w + 'px', height: box.h + 'px' }, data: { text, shaded: L % 2 === 1 },
+          });
+        });
+      }
+      // 卡片上显示什么：后端给了 sub 就用；给了 progress 显示「学习中 N%」和进度条；
+      // 否则按状态——已掌握 / 可学 / 需要 XX（锁定时列出还没掌握的前置，最多两个）
+      const view = n => {
+        const st = _kgState[n.state] || '';
+        const bar = typeof n.progress === 'number' ? Math.max(0, Math.min(100, Math.round(n.progress * 100))) : null;
+        let sub = n.sub != null ? String(n.sub) : '';
+        if (n.sub == null) {
+          if (bar != null) sub = '学习中 ' + bar + '%';
+          else if (st === 'kg-done') sub = '已掌握';
+          else if (st === 'kg-open') sub = '可学';
+          else if (st === 'kg-locked') {
+            const miss = pre[K(n)].filter(p => _kgState[(byId[p] || {}).state] !== 'kg-done')
+              .map(p => byId[p] && byId[p].label != null ? String(byId[p].label) : p);
+            sub = miss.length ? '需要 ' + miss.slice(0, 2).join('、') + (miss.length > 2 ? ' 等' : '') : '未解锁';
+          }
+        }
+        const icon = n.icon != null ? _kgEsc(n.icon) : (_kgIcon[st] || '');
+        return { icon, sub, bar };
+      };
+      src.forEach(n => {
+        const c = pos[K(n)];
+        if (!c) return;
+        nodes.push({
+          id: K(n), type: 'kg', position: { x: c.x - BW / 2, y: c.y - BH / 2 },
+          label: n.label != null ? String(n.label) : K(n),
+          class: [_kgState[n.state], n.class, opts.around && K(n) === cid ? 'kg-center' : ''].filter(Boolean).join(' '),
+          style: Object.assign({ width: BW + 'px', height: BH + 'px' }, n.style || {}),
+          // 卡片显示用的东西放 __view，点中时剥掉，写进「选中」的仍是后端原样节点
+          draggable: false, data: Object.assign({}, n, { __view: view(n) }),
+        });
+      });
+      const edges = [];
+      src.forEach(n => pre[K(n)].forEach(p => {
+        if (!pos[p] || !pos[K(n)]) return;
+        edges.push({
+          // 直角折线。纵向下出上进，横向右出左进；前置已掌握的线着主色，没掌握的淡灰
+          id: 'p:' + p + '>' + K(n), source: p, target: K(n), type: 'smoothstep',
+          pathOptions: { borderRadius: 8 },
+          sourceHandle: lr ? 'qs' : 'out', targetHandle: lr ? 'pt' : 'in',
+          class: _kgState[(byId[p] || {}).state] === 'kg-done' ? 'kg-live' : 'kg-dim',
+        });
+      }));
+      // 对照只连同一层的：跨层连会穿过别的卡片，看着像接错了。纵向从侧面连，横向从上下连
+      src.forEach(n => con[K(n)].forEach(c => {
+        if (c <= K(n) || depth[c] !== depth[K(n)]) return;
+        const a = pos[K(n)], b = pos[c];
+        if (!a || !b) return;
+        let s = K(n), t = c, sh, th;
+        if (lr) { if (b.y < a.y) { s = c; t = K(n); } sh = 'out'; th = 'in'; }
+        else { const far = b.x >= a.x; sh = far ? 'qs' : 'ps'; th = far ? 'pt' : 'qt'; }
+        edges.push({ id: 'c:' + K(n) + '~' + c, source: s, target: t, type: 'straight', class: 'kg-contrast', sourceHandle: sh, targetHandle: th });
+      }));
+      const longest = src.length ? Math.max(...src.map(n => depth[K(n)])) + 1 : 0;
+      const legend = '实心带勾=已掌握\u3000亮边=可学\u3000灰色带锁=未解锁\u3000角标=下游节点数\u3000虚线=对照关系\u3000共 '
+        + src.length + ' 个节点，最长链 ' + longest + ' 步';
+      // vkey：VueFlow 的 :key。数据或当前点一换就重建、重新取景
+      const out = { nodes, edges, legend, vkey: nodes.length + ':' + edges.length + ':' + cid };
+      _graphCache.set(path, { key, out });
+      return out;
+    }
+    // 点节点：原样节点对象写进「选中」路径；点空白清掉。之后用「当 shared.sel」
+    // 控制显隐、「显示 sel.label」展示内容，都是现成词汇。层带节点不算。
+    function onGraphNode(path, ev, popup, carry) {
+      if (ev && ev.node && ev.node.type === 'kglayer') return;
+      let d = ev && ev.node ? ev.node.data : null;
+      if (d && d.__view) { d = Object.assign({}, d); delete d.__view; }
+      if (path) _graphPut(shared.value, path, d);
+<% if has_overlays %>
+      // 「点开 浮层」：点中节点就直接弹详情。点空白处（ev 为 null）不弹。
+      // 「带 code」：走 showOverlay，参数进地址，浮层的「载入」据此把这个点的详情
+      // 拉回来。先清空表单：上一个点的前置、条目不能还挂着
+      if (popup && ev && ev.node) {
+        if (carry && typeof showOverlay === 'function') {
+          reset(current.value.name);
+          showOverlay(popup, { [carry]: ev.node.id });
+        } else openOverlay.value = popup;
+      }
+<% endif %>
+    }
+<% endif %>
+    return {<% if has_markdown %> markdown,<% endif %> route, params, forms, form, rowsOf, lists, notice, nav, PAGE, AUTH_SCREENS, current<% if i18n_langs %>, i18nLang, switchLang<% endif %><% if has_me %>, me<% endif %><% if has_subject_switch %>, switchSubject<% endif %>, visible, busy, pending, go, isHref, hrefOf, targetOf, reset, onSubmit, onAction, onRow, onKey, grow, screens<% if home_logout %>, onHome<% endif %><% if has_enter %>, enterKey<% endif %><% if has_files %>, files, pickFile, setFileEl<% endif %><% if has_row_remote %>, onRowRemote<% endif %><% if has_msg_actions %>, msgActions, onMsgAction<% endif %><% if has_overlays %>, openOverlay, showOverlay, closeOverlay<% endif %><% if has_shared_state %>, shared, setStreamEl, pushMessages, getPath<% endif %><% if has_endpoints or has_to_actions %>, submitTo, clearFields<% endif %><% if has_graphs %>, graphOf, onGraphNode<% endif %> };
+  },
+  template: `
+{#- 顶部导航。两种来路：
+
+    项目编译时算好的 nav（多个实体的列表界面，见 gen/project.py 的
+    compute_nav）——传了就用它，不管 .ui 里有没有「切到」。
+
+    没传时照旧：.ui 里用了「切到」就说明界面切换已经自己安排好了（比如
+    放进顶栏），这段是多余的；没用「切到」时它是唯一的切换入口，不能省。
+
+    早先是在样式表里写 nav { display:none } 无条件藏掉——那对 app2 正好
+    （模式按钮在顶栏），但任何没用「切到」的 .ui 就再也切不了界面了。
+    该由引擎判断的事不要写死在样式表里。 -#}
+<% if nav %>
+    <nav class="app-nav" v-if="!AUTH_SCREENS.includes(current.name)">
+      <a v-for="n in nav" :key="n.target"
+         :class="{ active: n.group.includes(current.name) }"
+         href="#" @click.prevent="go(n.target)">{{ n.label }}</a>
+<% if has_subject_switch %>
+      <select v-if="me.user && me.subjects && me.subjects.length > 1" class="nav-subject" @change="switchSubject">
+        <option v-for="s in me.subjects" :key="s.id" :value="s.id" :selected="s.id === me.subject">{{ s.name }}</option>
+      </select>
+<% endif %>
+<% if has_lang_switch %>
+      <span class="nav-lang"><a href="#" :class="{ on: i18nLang === 'zh' }" @click.prevent="switchLang('zh')">中文</a><span class="nav-lang-sep">/</span><a href="#" :class="{ on: i18nLang === 'ja' }" @click.prevent="switchLang('ja')">日本語</a></span>
+<% endif %>
+<% if nav_logout %>
+{#- 退出登录是个动作，不是跳转，所以用 button 而不是 a：键盘和读屏软件
+    认得出区别，测试里按文字找按钮也才找得到。样式上跟导航项一致。 -#}
+<% if has_me %>
+      <span v-if="me.user" class="nav-user-name">{{ me.label }}</span>
+<% endif %>
+      <button type="button" class="nav-logout" @click.prevent="submitTo('auth_logout')">退出登录</button>
+<% endif %>
+    </nav>
+<% elif not has_goto and screens|length > 1 %>
+{#- 「侧 管理」的界面不跟学习者的页面混排：左边是没写「侧」的，写了的按
+    组名归到右边一组，前面一个组名（「管理」）。只是位置分开，不是权限。 -#}
+    <nav v-if="current.name !== '登录' && current.name !== '注册'" :class="[PAGE.role ? 'nav-role-' + PAGE.role : ''<% if has_me %>, me.role ? 'nav-role-' + me.role : ''<% endif %>]">
+{#- 这是哪一端（「教师端」）：按端拆出来的页面（/teacher）一直显示；多人模式下
+    没拆页面时看登录的人（auth_me 的 badge） -#}
+<% if has_me %>
+      <span v-if="PAGE.badge || (me.user && me.badge)" class="nav-badge">{{ PAGE.badge || me.badge }}</span>
+<% else %>
+      <span v-if="PAGE.badge" class="nav-badge">{{ PAGE.badge }}</span>
+<% endif %>
+      <a v-for="s in screens.filter(s => !s.side).filter(s => !AUTH_SCREENS.includes(s.name)).filter(visible)" :key="s.name"
+         :class="{ active: current.name === s.name }"
+         href="#" @click.prevent="go(s.name)">{{ s.name }}</a>
+<% for side in nav_sides %>
+      <span class="nav-side"<% if loop.first %> style="margin-left:auto"<% endif %><% if has_me %> v-if="!me.hide.includes('<%= side %>') && screens.some(s => s.side === '<%= side %>' && visible(s))"<% endif %>>
+        <span class="nav-side-h"><%= side %></span>
+        <a v-for="s in screens.filter(s => s.side === '<%= side %>').filter(visible)" :key="s.name"
+           :class="{ active: current.name === s.name }"
+           href="#" @click.prevent="go(s.name)">{{ s.name }}</a>
+      </span>
+<% endfor %>
+<% if has_me %>
+{#- 开着登录时：谁登录着、改密码、退出。没开登录（单人用）user 是空串，不显示 -#}
+      <span v-if="me.user" class="nav-user">
+<% if has_subject_switch %>
+        <select v-if="me.subjects && me.subjects.length > 1" class="nav-subject" @change="switchSubject">
+          <option v-for="s in me.subjects" :key="s.id" :value="s.id" :selected="s.id === me.subject">{{ s.name }}</option>
+        </select>
+<% endif %>
+        <span class="nav-user-name">{{ me.label }}</span>
+        <a v-if="screens.some(s => s.name === '改密码')" href="#" @click.prevent="go('改密码')">改密码</a>
+<% if has_logout %>
+        <button type="button" class="nav-logout" @click.prevent="submitTo('auth_logout')">退出</button>
+<% endif %>
+      </span>
+<% endif %>
+<% if has_lang_switch %>
+      <span class="nav-lang"><a href="#" :class="{ on: i18nLang === 'zh' }" @click.prevent="switchLang('zh')">中文</a><span class="nav-lang-sep">/</span><a href="#" :class="{ on: i18nLang === 'ja' }" @click.prevent="switchLang('ja')">日本語</a></span>
+<% endif %>
+<% if home_logout %>
+{#- 「认证 换端 先退出」：同一标签页，先退出再去主页面的登录页 -#}
+      <span v-if="PAGE.home" class="nav-home"><a :href="PAGE.home.path" @click="onHome">{{ PAGE.home.label }}</a></span>
+<% else %>
+{#- 非主页面（教师端）上一个小链接，新标签页打开主页面（学生端）看看 -#}
+      <span v-if="PAGE.home" class="nav-home"><a :href="PAGE.home.path" target="_blank" rel="noopener">{{ PAGE.home.label }}</a></span>
+<% endif %>
+    </nav>
+<% endif %>
+<% if has_lang_switch %>
+{#- 登录页没有导航（登录/注册在 AUTH_SCREENS 里，上面的导航整个不渲染），
+    语言切换单独画一份：只改本机 localStorage，不调接口——登录后 applyLang
+    以账号 lang 为准（auth_me 的 lang）。 -#}
+    <div v-if="AUTH_SCREENS.includes(current.name)" class="auth-lang"><span class="nav-lang"><a href="#" :class="{ on: i18nLang === 'zh' }" @click.prevent="switchLang('zh')">中文</a><span class="nav-lang-sep">/</span><a href="#" :class="{ on: i18nLang === 'ja' }" @click.prevent="switchLang('ja')">日本語</a></span></div>
+<% endif %>
+{#- 登录页上没有顶栏：按端拆出来的页面在登录框上面标一句是哪一端 -#}
+    <div v-if="PAGE.badge && (current.name === '登录' || current.name === '注册')" class="page-end">{{ PAGE.badge }}</div>
+    <% for screen_node in screens %>
+    <form v-if="current.name === '<%= screen_node.name %>'" class="screen" @submit.prevent="onSubmit">
+      <% for c in screen_node.body() %><%= 节点(c) %><% endfor %>
+    </form>
+{#- 浮层渲染在 <form> 之外：嵌在表单里的话，浮层内的提交按钮会连带触发
+    外层表单的 submit。 -#}
+    <% for o in screen_node.overlays() %>
+    <template v-if="current.name === '<%= screen_node.name %>'"><%= 节点(o) %></template>
+    <% endfor %>
+    <% endfor %>
+{#- 提示条：保存成功、后端报错，总得让人看见。放在所有界面外面——它跟
+    当前是哪个界面无关，而且嵌在 form 里的话切界面会连提示一起消失。 -#}
+    <div v-if="notice" :class="['toast', notice.kind === 'no' ? 'toast-no' : 'toast-ok']"
+         @click="notice = null">{{ notice.text }}</div>
+  `
+});
+<% if has_graphs %>
+// 节点图的组件。VueFlowCore 从 CDN 来，加载不上就跳过注册——不判断的话这一
+// 行抛 ReferenceError，整个应用挂不起来，**连不带图的列表都是白的**。图加载
+// 不出来该是图那一块空着，不该把整页拖垮。断网、CDN 被拦（国内访问 unpkg
+// 经常超时）都会撞上；实测过，页面全白、控制台只有一句 not defined。
+if (typeof VueFlowCore !== "undefined") {
+  _app.component("VueFlow", VueFlowCore.VueFlow);
+  _app.component("Handle", VueFlowCore.Handle);
+} else {
+  console.warn("Vue Flow 没加载上，节点图不显示；页面其余部分照常。");
+  _app.component("VueFlow", { template: '<div class="graph-missing">图组件没加载（检查网络或 CDN）</div>' });
+  _app.component("Handle", { template: "<span></span>" });
+}
+<% endif %>
+<% if has_poll %>
+// 「每隔 N」：v-if 跟着动作的「当」，挂上就开始定时、卸下（条件不成立、切走
+// 界面）就停。用组件的生命周期管定时器，不用自己记「哪个界面开着几个」。
+_app.component("ZsPoll", {
+  props: ["action", "every"],
+  inject: ["zsPoll"],
+  mounted() {
+    const ms = Math.max(Number(this.every) || 2, 1) * 1000;
+    this._t = setInterval(() => this.zsPoll(this.action), ms);
+  },
+  unmounted() { clearInterval(this._t); },
+  template: "<span hidden></span>",
+});
+<% endif %>
+_app.mount("#app");

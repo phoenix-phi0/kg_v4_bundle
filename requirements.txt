@@ -1,0 +1,7 @@
+# kg_v4 运行时直接依赖（传递依赖由 pip 按 wheels/ 解出）。版本钉开发机 .venv（CPython 3.13.5）。
+# 追踪分析（audit hook + AST 闭包）：requests / PyYAML / pypdf 是懒加载（真模型 / 读YAML / 读PDF），但都要装。
+Flask==3.1.3   # HTTP 服务（tools/dsl_http.py、gen/project.py）
+Jinja2==3.1.6   # 界面与代码生成模板
+PyYAML==6.0.3   # verbs/data「读YAML」（懒加载）
+requests==2.34.2   # tools/zhipu.py 真模型（懒加载）
+pypdf==6.21.4   # verbs/doc「读文档」读PDF（懒加载）

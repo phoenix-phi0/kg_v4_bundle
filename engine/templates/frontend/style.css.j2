@@ -1,0 +1,495 @@
+{#- 三段式全屏：顶栏和底栏固定，中间那段自己滚。靠 .ui 里的「顶栏」
+    「底栏」修饰指定谁是头尾，没标的都在中间那段里。
+
+    配色照 app2 旧版 agents/serve.py 的 PAGE，逐项对比过零差异。这一层
+    是主题不是结构——换个应用大概率要改 :root 里那组变量，但下面的布局
+    规则不用动。
+
+    三处踩过的坑，改之前先读注释：CSS 特异性两处、flex 简写一处。 -#}
+:root {
+  --bg:#faf9f7; --panel:#fff; --line:#e6e2dc;
+  --ink:#2b2825; --dim:#8a827a; --accent:#6b5b95;
+  --user:#eef1f8; --tool:#f5f2ed; --ok:#3d7a4e; --no:#a8443c;
+}
+* { box-sizing:border-box; }
+body {
+  margin:0; background:var(--bg); color:var(--ink);
+  font:15px/1.7 -apple-system,"Hiragino Sans","Noto Sans CJK SC",
+       "Microsoft YaHei",sans-serif;
+  height:100vh; overflow:hidden;
+}
+#app { height:100vh; display:flex; flex-direction:column; }
+
+/* 引擎为「多个界面」生成的切换条，在 .screen 外面自成一行。
+
+   .ui 里用了「切到」的话模板根本不生成这段——界面切换已经自己安排好了
+   （app2 把模式按钮放进了顶栏，因为 nav 和 .screen 是纵向 flex 的两个
+   兄弟，样式上并不到一行）。
+
+   早先这里写 nav { display:none } 无条件藏掉，对 app2 正好，但任何没用
+   「切到」的 .ui 就再也切不了界面——nav 是它唯一的入口。该由引擎判断的
+   事不要写死在样式表里。 */
+nav {
+  display:flex; gap:8px; align-items:center;
+  padding:12px 20px 0; background:var(--panel);
+}
+nav a {
+  padding:5px 12px; border:1px solid var(--line); background:var(--panel);
+  border-radius:5px; font-size:13px; text-decoration:none; color:var(--ink);
+}
+nav a:hover { background:var(--tool); }
+nav a.active { background:var(--accent); color:#fff; border-color:var(--accent); }
+
+/* 顶部导航（项目编译时算出来的那条，见 gen/project.py 的 compute_nav）。
+   跟上面那个 nav 共用样式，只多一点：退出登录推到最右边。 */
+.app-nav { display:flex; gap:8px; align-items:center; }
+/* 「侧 管理」的那组：推到右边，前面一个灰色组名，跟学习者的页面隔开 */
+.nav-side { display:flex; gap:8px; align-items:center; padding-left:12px; border-left:1px solid var(--line); }
+.nav-side-h { font-size:12px; color:var(--muted); }
+/* 退出登录是 button（它是动作不是跳转），这里把它压成跟导航项一样的样子 */
+.app-nav .nav-logout {
+  margin-left:auto; background:none; border:1px solid transparent;
+  color:var(--muted); cursor:pointer; font:inherit; padding:4px 10px;
+  border-radius:4px;
+}
+.app-nav .nav-logout:hover { background:var(--tool); color:var(--ink); }
+/* 开着登录时顶栏右边：显示名、改密码、退出 */
+.nav-user { display:flex; gap:8px; align-items:center; margin-left:auto; padding-left:12px; }
+.nav-user-name { font-size:13px; color:var(--muted); }
+/* 多人模式下这是哪一端（/auth/me 的 badge）。教师端整条顶栏换个颜色，一眼
+   看得出不是学生的页面 */
+.nav-badge {
+  font-size:12px; font-weight:600; padding:3px 10px; border-radius:10px;
+  background:var(--accent); color:#fff;
+}
+nav.nav-role-teacher { background:#fbf3e6; border-bottom:2px solid #b4690e; padding-bottom:10px; }
+nav.nav-role-teacher .nav-badge { background:#b4690e; }
+/* 非主页面（教师端）顶栏右边的「打开学生端」：没登录时它推到最右，有账号区时跟在后面 */
+.nav-home { margin-left:auto; padding-left:12px; font-size:12px; }
+.nav-user + .nav-home { margin-left:0; }
+.nav-home a { color:var(--muted); }
+/* 登录页上方：这是哪一端 */
+.page-end { max-width:360px; margin:24px auto 0; font-size:15px; font-weight:600; color:#b4690e; text-align:center; }
+nav.nav-role-teacher a.active { background:#b4690e; border-color:#b4690e; }
+.nav-user .nav-logout {
+  background:none; border:1px solid transparent; color:var(--muted); cursor:pointer;
+  font:inherit; font-size:13px; padding:4px 10px; border-radius:4px;
+}
+.nav-user .nav-logout:hover { background:var(--tool); color:var(--ink); }
+<% if has_me is defined and has_me and '"subject_switch"' in endpoints_json %>
+/* 顶栏科目切换器（项目声明了 subject_switch 动作、auth_me 返回多个 subjects 时才出现） */
+.nav-subject {
+  font:inherit; font-size:13px; padding:3px 6px; border:1px solid var(--line);
+  border-radius:4px; background:#fff; color:var(--ink); margin-left:auto;
+}
+.nav-user .nav-subject { margin-left:0; }
+.app-nav .nav-subject + .nav-user-name, .app-nav .nav-subject + .nav-logout { margin-left:0; }
+<% endif %>
+
+/* 提示条：固定在底部中间，几秒后自己消失，点一下也能关。给没有消息流的
+   界面用——保存成功、后端报错，总得有个地方说一声。早先这类界面的消息
+   被静默丢掉：点保存成功了什么都不显示，人不知道到底存没存。
+
+   z-index 压过浮层（.overlay 是 100）：浮层里保存失败时提示得让人看见，
+   不然只会觉得点了没反应。 */
+.toast {
+  position:fixed; left:50%; bottom:28px; transform:translateX(-50%);
+  max-width:min(560px, 90vw); padding:10px 18px; border-radius:6px;
+  font-size:14px; line-height:1.5; cursor:pointer; z-index:200;
+  box-shadow:0 4px 16px rgba(0,0,0,.18); word-break:break-word;
+}
+.toast-ok { background:var(--ink); color:#fff; }
+.toast-no { background:#b3261e; color:#fff; }
+
+/* 「切到」动作渲染成的模式按钮：选中的用主色 */
+.btn-mode-on { background:var(--accent); color:#fff; border-color:var(--accent); }
+
+/* 一个界面就是一整屏，三段式 */
+.screen {
+  flex:1; min-height:0; display:flex; flex-direction:column;
+}
+
+/* 顶栏/底栏：不滚，横排一行 */
+.bar-top, .bar-bottom {
+  flex:none; background:var(--panel); padding:12px 20px;
+  display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+}
+.bar-top { border-bottom:1px solid var(--line); }
+.bar-bottom { border-top:1px solid var(--line); }
+.bar-top .field, .bar-bottom .field {
+  flex-direction:row; align-items:center; gap:6px; margin:0;
+}
+/* 底栏里没标尺寸的字段占满剩余——输入框几乎总是这样。
+   .ui 里标了「宽」的会带 flex:none，优先级更高，覆盖得掉这条。 */
+.bar-bottom .field { flex:1; }
+.bar-top select, .bar-top input { font-size:13px; padding:4px 8px; }
+
+/* 中间那段：唯一可滚的区域。
+
+   不要写成 .screen > :not(.bar-top):not(.bar-bottom) { flex:none } ——
+   :not() 的特异性按它参数里的选择器算，那样是三个类，会压过
+   .screen > .stream 的两个类，结果 flex:none 赢，消息流撑不开、底栏
+   也不贴底，整个三段式塌成普通文档流。class 全对，看着却像没生效。
+
+   通配符的特异性是 0，所以下面这条谁都压不过，.stream 稳赢。 */
+.screen > * { flex:none; }
+.screen > .stream, .screen > .grow { flex:1 1 auto; min-height:0; overflow-y:auto; }
+
+/* 顶栏底栏要排除掉：它们自带 12px 20px，而这条写在后面、特异性相同，
+   会把垂直内边距抹成 0——同一个元素 class="group row bar-top" 两条都命中。 */
+.region, .group:not(.bar-top):not(.bar-bottom) { padding:0 20px; }
+.group h3, .region-h {
+  font-size:12px; color:var(--dim); margin:12px 0 6px; font-weight:600;
+}
+.row { display:flex; gap:12px; align-items:flex-start; }
+.col { display:flex; flex-direction:column; }
+.grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+.grow { flex:1; min-height:0; }
+
+/* 消息流：内容居中，行别太长 */
+.stream { padding:24px 20px; overflow-y:auto; }
+.stream-body { max-width:760px; margin:0 auto; }
+.smsg { margin-bottom:22px; }
+.who { display:block; font-size:12px; color:var(--dim); margin-bottom:5px; }
+.smsg .body { white-space:pre-wrap; word-break:break-word; }
+.smsg-user .body {
+  background:var(--user); padding:10px 14px; border-radius:10px;
+  display:inline-block; max-width:100%;
+}
+.smsg-ok .body { color:var(--ok); }
+.smsg-no .body { color:var(--no); }
+.smsg-pending .body { color:var(--dim); }
+/* 消息带的链接（老师给的「去做题」）：单独一行，看得出能点 */
+.smsg-link { display:inline-block; margin-top:8px; color:var(--accent, #2563eb); }
+.smsg-links { display:flex; flex-wrap:wrap; gap:4px 16px; }
+<% if has_msg_actions is defined and has_msg_actions %>
+/* 消息下面的按钮（消息流「按钮」）：带按钮的消息画成一张卡，看得出是待确认的一件事 */
+.smsg-card { border:1px solid var(--line, #e5e5e5); border-radius:10px; padding:12px 14px; }
+.smsg-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+<% endif %>
+
+/* 工具调用折叠面板 */
+.tools {
+  margin-top:10px; font-size:12px; color:var(--dim);
+  background:var(--tool); border-radius:8px; padding:8px 12px;
+  font-family:ui-monospace,"SF Mono",Menlo,monospace; line-height:1.6;
+}
+.tools summary { cursor:pointer; outline:none; }
+.tools div { margin-top:5px; white-space:pre-wrap; }
+
+/* 表单控件 */
+.field { display:flex; flex-direction:column; gap:5px; margin-bottom:10px; }
+.lbl { font-size:13px; color:var(--dim); }
+.req { color:var(--no); margin-left:3px; }
+input, textarea, select {
+  border:1px solid var(--line); border-radius:5px; padding:6px 10px;
+  font:inherit; background:var(--panel); color:var(--ink);
+}
+input:focus, textarea:focus, select:focus { outline:none; border-color:var(--accent); }
+/* rows="1" 起手，grow() 跟着内容长；min-height 托住下限，max 封顶后滚动 */
+textarea { resize:none; min-height:46px; max-height:180px; border-radius:8px; }
+
+/* 控件默认占满所在字段——底栏那个输入框几乎总是要铺开的。
+   .ui 里标了「宽」的控件带内联 flex:none，优先级更高，压得住这条。
+
+   写成三个长属性而不是简写 flex:1 1 0：jsdom 的 getComputedStyle 不
+   展开 flex 简写，读 flexGrow 永远是 0，测试里看着像没生效。真浏览器
+   两种等价，但测不出来的规则没法验。 */
+.field > input, .field > textarea, .field > select {
+  flex-grow:1; flex-shrink:1; flex-basis:0; min-width:0;
+}
+
+.radios { display:flex; flex-wrap:wrap; gap:10px; }
+.opt { display:flex; align-items:center; gap:5px; font-size:14px; }
+
+/* 按钮 */
+.btn {
+  border:1px solid var(--line); background:var(--panel); color:var(--ink);
+  border-radius:5px; padding:5px 12px; font:inherit; font-size:13px;
+  cursor:pointer; flex:none;
+}
+.btn:hover { background:var(--tool); }
+.btn:disabled { opacity:.45; cursor:default; }
+.btn-primary {
+  background:var(--accent); color:#fff; border-color:var(--accent);
+  border-radius:8px; padding:0 20px; align-self:stretch;
+}
+/* 主按钮悬停：上面 .btn:hover 把底色换成浅米色，特异性（类+伪类）比
+   .btn-primary 高，主按钮一悬停就成了米底白字，几乎看不见——做题页的
+   「开始」「作答」鼠标一放上去就像没了。真浏览器截图才看出来，jsdom 不悬停。 */
+.btn-primary:hover { background:var(--accent); filter:brightness(1.12); }
+.btn-danger { color:var(--no); }
+/* 「链接」：按钮样子的链接，和普通文字链接（次要）；表格里的一格链接 */
+.link-btn { display:inline-block; text-decoration:none; align-self:flex-start; }
+.link-plain, .cell-link { color:var(--accent); text-decoration:none; }
+.link-plain:hover, .cell-link:hover { text-decoration:underline; }
+
+/* 「显示」节点：.ui 里不写标签就只出值。
+   margin-left:auto 顶替了旧版那个 <span class="sp"> 弹簧。 */
+.dyn {
+  margin:0; font-size:12px; color:var(--dim);
+  font-variant-numeric:tabular-nums;
+}
+.dyn .lbl { margin-right:6px; }
+.bar-top .dyn { margin-left:auto; }
+
+/* 「文案」：底部那行提示 */
+.copy {
+  max-width:760px; margin:6px auto 0; font-size:12px;
+  color:var(--dim); padding:0 20px;
+}
+.bar-bottom .copy { margin:0; padding:0; }
+
+/* 「显示 … 正文」：按正文排，大字、保留换行（题干、批改解析） */
+.dyn.prose {
+  font-size:17px; line-height:1.9; color:var(--ink);
+  white-space:pre-wrap; word-break:break-word;
+}
+
+/* 「分组 … 卡片」：居中的一张卡。.screen 不滚（三段式的中间那段才滚），
+   卡片内容多的时候自己滚，不然解析一长就被截在屏幕外。
+   特异性要压过上面 .group:not(.bar-top):not(.bar-bottom) 的 padding:0 20px。 */
+.group.card:not(.bar-top):not(.bar-bottom) {
+  width:calc(100% - 40px); max-width:720px; margin:28px auto 8px;
+  padding:24px 28px; gap:14px;
+  background:var(--panel); border:1px solid var(--line); border-radius:14px;
+  box-shadow:0 8px 28px rgba(43,40,37,.08);
+  max-height:calc(100vh - 170px); overflow-y:auto;
+  animation:card-in .32s ease-out;
+}
+/* 翻页：「翻页 <路径>」的值一变卡片重建，这段动画就再播一次 */
+@keyframes card-in {
+  from { opacity:0; transform:perspective(900px) translateX(36px) rotateY(-10deg); }
+  to   { opacity:1; transform:none; }
+}
+.card .field { margin:0; }
+.card .btn-primary { align-self:flex-end; padding:8px 24px; }
+
+/* 「选项」：带内容的大按钮，一行一个。判完由后端给 state：
+   right 绿、wrong 红、dim 淡出，有 state 的按钮锁住 */
+.choices { display:flex; flex-direction:column; gap:10px; }
+.choice {
+  display:flex; align-items:center; gap:12px; width:100%;
+  padding:12px 16px; text-align:left; cursor:pointer;
+  border:1.5px solid var(--line); border-radius:10px;
+  background:var(--panel); color:var(--ink); font:inherit; font-size:16px;
+  transition:border-color .12s, background .12s;
+}
+.choice:hover:not(:disabled) { border-color:var(--accent); background:#f6f4fa; }
+.choice:disabled { cursor:default; }
+.choice-k {
+  flex:none; width:28px; height:28px; border-radius:50%;
+  display:inline-flex; align-items:center; justify-content:center;
+  background:var(--tool); font-size:14px;
+}
+.choice-right { border-color:var(--ok); background:#eef6f0; }
+.choice-right .choice-k { background:var(--ok); color:#fff; }
+.choice-wrong { border-color:var(--no); background:#faeeec; }
+.choice-wrong .choice-k { background:var(--no); color:#fff; }
+.choice-dim { opacity:.5; }
+<% if has_choices is defined and has_choices %>
+/* 判完（按钮带了 state）选项不用再点了，收紧：对错还是一眼看得出（颜色、
+   字母底色），省下的高度让「下一题」不用往下滚 */
+.choices:has(.choice:disabled[class*="choice-"]) { gap:6px; }
+.choice[class*="choice-"] { padding:6px 14px; font-size:15px; }
+<% endif %>
+
+table { width:100%; border-collapse:collapse; }
+th, td { text-align:left; padding:7px 10px; border-bottom:1px solid var(--line); }
+th { font-size:12px; color:var(--dim); }
+
+/* 浮层：遮罩铺满视口，面板居中。
+
+   position:fixed 而不是 absolute——面板要相对视口定位，而 .screen 是
+   flex 容器，absolute 会跟着它跑偏。z-index 压过顶栏底栏。 */
+.overlay {
+  position:fixed; inset:0; z-index:50;
+  background:rgba(43,40,37,.38);
+  display:flex; align-items:center; justify-content:center;
+  padding:24px;
+}
+.overlay-box {
+  background:var(--panel); border-radius:12px; padding:20px;
+  box-shadow:0 12px 40px rgba(0,0,0,.18);
+  max-width:100%; max-height:100%; overflow-y:auto;
+  display:flex; flex-direction:column; gap:12px;
+}
+
+/* 浮层内容超过一屏时**自己滚**，不要把后面的挤出视口。
+   撞过：浮层里放了邻域图 320px + 三张小图，加起来比屏幕高，后面的
+   「挂着的词」直接看不到，看着像那一段没渲染出来。
+   卡片限高 88vh，超出的部分滚动；图本身不缩，滚到就行。 */
+/* 内容超过一屏时卡片自己滚。浮层卡片的内联样式不再带 flex:none
+   （见 layout.j2 的「样式(node, false)」），所以这里不用 !important。 */
+.overlay-box { max-height:88vh; overflow-y:auto; overscroll-behavior:contain; }
+.overlay-h { margin:0; font-size:15px; font-weight:600; color:var(--ink); }
+/* 浮层里的按钮靠右，跟对话框的习惯一致。.btn-primary 在别处是
+   align-self:stretch（底栏里要跟输入框等高），浮层里不需要。 */
+.overlay-box .btn { align-self:auto; }
+.overlay-box > .btn { margin-left:auto; }
+.overlay-box .copy { max-width:none; margin:0; padding:0; }
+.overlay-box .group, .overlay-box .region { padding:0; }
+
+/* 节点图：高度由 .ui 里的「高」给（内联 style），这里让 Vue Flow 撑满容器。 */
+.graph-wrap { width:100%; min-height:240px; border:1px solid var(--line); border-radius:8px; background:var(--panel); }
+.graph-wrap > .vue-flow { width:100%; height:100%; }
+
+/* 节点图的节点：照 kg_svg 的样子。未标状态时是淡色，三态由 state 给。 */
+.graph-wrap .vue-flow__node-kg { padding:0; border:0; background:transparent; }
+.kg-node {
+  box-sizing:border-box; width:100%; height:100%; position:relative;
+  display:flex; align-items:center; justify-content:center;
+  background:#fff; border:1px solid #ddd8d0; border-radius:7px;
+  font-size:13px; color:#b5aca1; cursor:pointer;
+}
+.vue-flow__node.kg-open .kg-node { border:2.2px solid #4a7a8c; color:#4a7a8c; }
+.vue-flow__node.kg-done .kg-node { background:#4a7a8c; border-color:#4a7a8c; color:#fff; }
+.vue-flow__node.kg-locked { opacity:.72; }
+.vue-flow__node.selected .kg-node { box-shadow:0 0 0 3px rgba(74,122,140,.25); }
+.kg-badge {
+  position:absolute; top:-7px; right:-7px; min-width:18px; height:18px;
+  padding:0 4px; border-radius:9px; background:#4a7a8c; color:#fff;
+  font-size:10px; line-height:18px; text-align:center;
+}
+/* 连接点只用来定线的起止位置，不给人看也不给人拖 */
+.kg-node .vue-flow__handle { opacity:0; pointer-events:none; }
+.graph-wrap .vue-flow__edge-path { stroke:#e2ddd5; stroke-width:1; }
+.graph-wrap .vue-flow__edge.kg-contrast .vue-flow__edge-path { stroke:#cfc4b4; stroke-dasharray:3 3; }
+
+/* 列表行按 state 上色，跟节点图同一套状态：已掌握 / 可学 / 锁定 */
+tr.row-done td { color:#4a7a8c; font-weight:600; }
+tr.row-open td { color:var(--ink); }
+tr.row-locked td { opacity:.55; }
+.overlay-box table { margin:4px 0; }
+
+/* 节点图（科技树）：底色、层带、「第 N 步」、图例 */
+.graph-wrap { background:#faf9f7; }
+.graph-wrap .vue-flow__node-kglayer { padding:0; border:0; background:transparent; pointer-events:none !important; }
+.kg-layer { width:100%; height:100%; position:relative; }
+.kg-layer.shaded { background:rgba(214,203,186,.28); }
+.kg-layer-t { position:absolute; left:12px; top:50%; transform:translateY(-50%); font-size:12px; color:#a89f93; white-space:nowrap; }
+.kg-legend { font-size:11px; color:#8a827a; margin:6px 0 0 8px; }
+/* 科技树卡片：状态图标 + 名字 + 说明行 + 进度条。写在最后，覆盖前面小方块的样式 */
+.kg-node {
+  display:flex; flex-direction:column; justify-content:center; align-items:stretch; gap:4px;
+  padding:8px 12px; border-radius:10px; text-align:left; background:#fff; border:1px solid #ddd8d0;
+}
+.kg-head { display:flex; align-items:center; gap:6px; min-width:0; font-size:13px; font-weight:600; color:#2b2825; }
+.kg-head .kg-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.kg-ico { flex:none; width:16px; height:16px; display:inline-flex; align-items:center; justify-content:center; font-size:14px; line-height:1; }
+.kg-ico:empty { display:none; }
+.kg-sub { font-size:11px; color:#8a827a; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.kg-bar { height:4px; border-radius:2px; background:#ece7df; overflow:hidden; }
+.kg-bar > i { display:block; height:100%; background:#4a7a8c; }
+.vue-flow__node.kg-done .kg-node { background:#4a7a8c; border-color:#4a7a8c; }
+.vue-flow__node.kg-done .kg-head { color:#fff; }
+.vue-flow__node.kg-done .kg-sub { color:rgba(255,255,255,.8); }
+.vue-flow__node.kg-done .kg-bar { background:rgba(255,255,255,.3); }
+.vue-flow__node.kg-done .kg-bar > i { background:#fff; }
+.vue-flow__node.kg-open .kg-node { border:2px solid #4a7a8c; }
+.vue-flow__node.kg-open .kg-head { color:#2f5563; }
+.vue-flow__node.kg-open .kg-ico { color:#4a7a8c; }
+.vue-flow__node.kg-locked { opacity:1; }
+.vue-flow__node.kg-locked .kg-node { background:#f5f2ed; border-color:#e6e0d6; }
+.vue-flow__node.kg-locked .kg-head { color:#a89f93; }
+.vue-flow__node.kg-locked .kg-sub { color:#b5aca1; }
+.vue-flow__node.selected .kg-node { box-shadow:0 0 0 3px rgba(74,122,140,.3); }
+/* 直角折线：已解锁的着主色，没解锁的淡灰 */
+.graph-wrap .vue-flow__edge.kg-live .vue-flow__edge-path { stroke:#4a7a8c; stroke-width:2; }
+.graph-wrap .vue-flow__edge.kg-dim .vue-flow__edge-path { stroke:#d6cfc4; stroke-width:1.5; }
+
+/* 节点图的库没加载上时的占位。整页不该因此白掉——图那块说清楚就行 */
+.graph-missing {
+  display:flex; align-items:center; justify-content:center;
+  min-height:180px; border:1px dashed var(--line);
+  border-radius:6px; color:var(--muted); font-size:14px;
+}
+
+/* 邻域图里的当前点 */
+.vue-flow__node.kg-center .kg-node { box-shadow:0 0 0 3px rgba(74,122,140,.45); }
+
+/* 图例浮在图的左下角，不单独占一行；不接鼠标，不挡拖动 */
+.graph-wrap { position:relative; }
+.graph-wrap > .kg-legend {
+  position:absolute; left:10px; bottom:8px; margin:0; z-index:5; pointer-events:none;
+  padding:3px 8px; border-radius:6px; background:rgba(250,249,247,.88);
+}
+
+/* 卡片收紧到 150×52 */
+.kg-node { padding:6px 10px; gap:3px; }
+
+/* 窄屏（手机，≤640px）：只在这里改，宽屏一条不动。
+   - 导航不换行，放不下就横向滚动（6–7 个界面一行挤不下，换行会把顶栏撑成两三行）；
+   - 「横排」里的区域、子布局、表格、字段改成一个占一整行——两栏上下堆叠、表单
+     字段竖排。用换行（flex-wrap）而不是 flex-direction:column：按钮那种横排
+     （「去处」「下一步」）照旧一行排，放不下才折。「比」「宽」是内联 style，
+     要 !important 才压得住；顶栏底栏不动（输入框和发送按钮还是一行）；
+   - 表格容器横向滚动，表格不压到比 560px 窄（不然每格挤成一两个字一行）；
+   - 两侧留白、卡片、浮层收小。 */
+@media (max-width:640px) {
+  nav, .app-nav {
+    flex-wrap:nowrap; overflow-x:auto; overflow-y:hidden;
+    padding:8px 12px 6px; -webkit-overflow-scrolling:touch; scrollbar-width:thin;
+  }
+  nav > *, .nav-side > *, .nav-user > * { flex:none; white-space:nowrap; }
+  .row:not(.bar-top):not(.bar-bottom) { flex-wrap:wrap; }
+  .row:not(.bar-top):not(.bar-bottom) > .region,
+  .row:not(.bar-top):not(.bar-bottom) > .layout,
+  .row:not(.bar-top):not(.bar-bottom) > .table-wrap,
+  .row:not(.bar-top):not(.bar-bottom) > .field {
+    flex:1 1 100% !important; width:auto !important; max-width:100%; min-width:0;
+  }
+  .grid { grid-template-columns:1fr !important; }
+  .table-wrap { overflow-x:auto; max-width:100%; -webkit-overflow-scrolling:touch; }
+  .table-wrap > table { min-width:560px; }
+  .bar-top, .bar-bottom { padding:8px 12px; }
+  .region, .group:not(.bar-top):not(.bar-bottom) { padding:0 12px; }
+  .stream { padding:16px 12px; }
+  .copy { padding:0 12px; }
+  .group.card:not(.bar-top):not(.bar-bottom) {
+    width:calc(100% - 16px); margin:12px auto 8px; padding:16px;
+  }
+  .overlay { padding:8px; }
+  .overlay-box { max-width:96vw; padding:14px; }
+}
+<% if i18n_langs %>
+/* —— 界面多语言（可选声明）：顶栏语言切换 + 日文字体栈。开 i18n 的项目才
+   生成这一段；html[lang="ja"] 时日文字体排在前面，中文回退不变。 —— */
+.nav-lang { display:inline-flex; align-items:center; gap:2px; margin-left:10px; }
+.nav-lang a { padding:3px 6px; border:none; background:none; font-size:13px;
+  color:var(--dim); cursor:pointer; }
+.nav-lang a.on { color:var(--ink); font-weight:600; text-decoration:underline; }
+.nav-lang .nav-lang-sep { color:var(--line); font-size:12px; }
+/* 登录页（auth 页没有导航）：语言切换单独画一份，居中 */
+.auth-lang { margin:10px auto 0; text-align:center; }
+.auth-lang .nav-lang { margin-left:0; }
+html[lang="ja"] body { font-family:-apple-system,"Hiragino Kaku Gothic ProN",
+  "Hiragino Sans","Yu Gothic Medium","Yu Gothic","Meiryo","Noto Sans CJK JP",
+  "Microsoft YaHei",sans-serif; }
+/* 教师端顶栏项多，加上语言切换、日文长文案后中等宽度放不下，文字会被挤成两行：
+   这个宽度段里收紧间距、不折行，再放不下就顶栏自己横向滚（同窄屏的做法）。
+   只作用于教师端顶栏；640px 以下仍走上面的窄屏规则，够宽时保持原样。 */
+@media (min-width:641px) and (max-width:1799px) {
+  nav.nav-role-teacher { gap:3px; padding-left:8px; padding-right:8px; overflow-x:auto; overflow-y:hidden; scrollbar-width:thin; }
+  nav.nav-role-teacher > *, nav.nav-role-teacher .nav-side > *, nav.nav-role-teacher .nav-user > * { flex:none; white-space:nowrap; }
+  nav.nav-role-teacher a { padding:4px 5px; font-size:12px; }
+  nav.nav-role-teacher .nav-side, nav.nav-role-teacher .nav-user { gap:3px; padding-left:5px; }
+  nav.nav-role-teacher .nav-badge { padding:3px 6px; }
+  nav.nav-role-teacher .nav-user-name { font-size:12px; }
+  nav.nav-role-teacher .nav-subject { font-size:12px; }
+  nav.nav-role-teacher .nav-logout { font-size:12px; padding:4px; }
+  nav.nav-role-teacher .nav-lang { margin-left:3px; }
+  nav.nav-role-teacher .nav-lang a { padding:3px 2px; }
+  nav.nav-role-teacher .nav-home { padding-left:3px; }
+  html[lang="ja"] nav.nav-role-teacher { letter-spacing:-.02em; }
+  html[lang="ja"] nav.nav-role-teacher .nav-side-h { display:none; }
+  html[lang="ja"] nav.nav-role-teacher .nav-user-name { max-width:48px; overflow:hidden; text-overflow:ellipsis; }
+  html[lang="ja"] nav.nav-role-teacher .nav-subject { max-width:84px; }
+}
+<% endif %>
+<% if has_markdown %>
+.markdown { white-space:normal; }
+.markdown pre { white-space:pre; overflow-x:auto; font-family:monospace; }
+.markdown code { font-family:monospace; }
+.markdown p { white-space:pre-wrap; }
+<% endif %>

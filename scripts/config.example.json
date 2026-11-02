@@ -1,0 +1,8 @@
+{
+  "_说明": "要真模型时：拷成 engine/config.json 再填值，然后 REAL=1 bash scripts/start.sh；没有它就是假模型（回复带 [模拟回复]），页面全部可演示。也可以不建文件，改用环境变量 ZHIPU_API_KEY / ZHIPU_MODEL / ZHIPU_BASE_URL。config.json 含密钥：不要提交、不要打进压缩包、不要发给别人。",
+  "api_key": "<填你的 API Key>",
+  "model": "<模型名，不写则按 engine/models.json 的档位>",
+  "base_url": "https://open.bigmodel.cn/api/paas/v4",
+  "timeout": 60,
+  "temperature": 0.7
+}

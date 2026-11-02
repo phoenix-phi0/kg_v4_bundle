@@ -1,0 +1,75 @@
+实体 subject_info subject_info
+  字段 code 文本 必填 唯一 科目编码，小写字母数字下划线，日语是
+  字段 name 文本 必填 显示名
+  字段 intro 长文本 说明，可空
+  字段 kind 文本 必填 类型：language
+  字段 caps 文本 必填 能力开关
+  字段 levels 文本 自定义等级列表，英文逗号分隔有序，空表示不分级
+  字段 qtypes 文本 必填 启用的题型，逗号分隔
+  字段 visibility 文本 必填 public
+  字段 owner 文本 必填 创建者教师用户名
+  字段 status 文本 必填 active
+  字段 created_at 文本 必填 建于时间
+  字段 updated_at 文本 必填 改于时间
+结束
+
+实体 subject_teacher subject_teacher
+  字段 subject_id 整数 必填 科目编号
+  字段 teacher 文本 必填 教师用户名
+  字段 role 文本 必填 owner
+  字段 created_at 文本 必填 建于时间
+  唯一 subject_id teacher
+结束
+
+实体 subject_student subject_student
+  字段 subject_id 整数 必填 科目编号
+  字段 learner 文本 必填 索引 学生用户名
+  字段 assigned_by 文本 必填 分配的教师，迁移登记的是空串
+  字段 status 文本 必填 active
+  字段 created_at 文本 必填 建于时间
+  唯一 subject_id learner
+结束
+
+实体 subject_pref subject_pref
+  字段 learner 文本 必填 唯一 学习者
+  字段 subject_id 整数 必填 当前科目编号
+结束
+
+实体 subject_ai subject_ai
+  字段 subject_id 整数 必填 唯一 科目编号
+  字段 persona 长文本 老师人设，可空
+  字段 tutor_prompt 长文本 问老师提示词，可空
+  字段 assist_prompt 长文本 教师助手提示词，可空
+  字段 summary_prompt 长文本 学情总结提示词，可空
+  字段 import_prompt 长文本 教材导入提示词，可空
+  字段 kg_gen_prompt 长文本 图谱生成提示词，可空
+  字段 updated_by 文本 最后修改的教师，可空
+  字段 updated_at 文本 最后修改时间，可空
+结束
+
+实体 subject_content_translation subject_content_translation
+  字段 tbl 文本 必填 内容表名：kg_point、kg_item、quiz_question、subject_info
+  字段 row_key 文本 必填 行业务键：知识点/条目 code、题号 question_no、科目编码 code（不用自增 id）
+  字段 field 文本 必填 字段名：title、name、stem、options、explain、intro
+  字段 lang 文本 必填 语言代码，目前只有 ja
+  字段 text 长文本 必填 译文（选项整串存，^ 分隔与原文同序同数）
+  字段 updated_at 文本 必填 更新时间
+  唯一 tbl row_key field lang
+结束
+
+页面 实体 subject_view 科目管理页面
+  字段 subj_id 整数 科目表编号列，也是编辑/成员浮层地址里带的科目编号
+  字段 subj_code 文本 科目编码（新建时填，建后不可改）
+  字段 subj_name 文本 科目名称
+  字段 subj_intro 长文本 科目说明
+  字段 subj_kind 枚举 通用,语言 类型（页面值域中文；通用存 general、语言存 language）
+  字段 subj_levels 文本 本科目等级（英文逗号分隔、从易到难；新建留空按类型取默认）
+  字段 subj_persona 长文本 AI 老师设定（subject_ai.persona；留空用按科目名生成的默认人设）
+  字段 subj_visibility 文本 科目表可见性列（公共/私有）
+  字段 subj_status 文本 科目表状态列（启用/停用/草稿）
+  字段 subj_owner 文本 科目表创建者列
+  字段 subj_my_role 文本 科目表我的身份列（负责/协作/公共只读/单人）
+  字段 subj_student_n 整数 科目表在册学生列
+  字段 subj_teacher_n 整数 科目表教师数列
+  字段 manage_head 文本 页面抬头
+结束

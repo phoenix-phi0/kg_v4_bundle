@@ -1,0 +1,5 @@
+{#- 不是自己的查不到——跟不存在一样。 -#}
+{% extends "@_base/one.sql.j2" %}
+{% set 一注 = "。不是自己的查不到——跟不存在一样" %}
+{% set 一排除 = "owner" %}
+{% set 一条件 = " AND owner = :current_user" %}

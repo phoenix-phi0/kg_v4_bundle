@@ -1,0 +1,7 @@
+包: kg_v4_bundle（engine + project + content(Python科目+课文+ja译文) + 离线依赖，可单独上线）
+语言: zh（DEFAULT_LANG=zh；界面词表 project/i18n/ja.tsv；Python 科目课文 13 课；日文译文 442+54 条在 content/python_v1/ja 和 ja_lesson）
+引擎提交: e25d2211ab6e4c90ea4015d185704fc2d70876ba（引擎仓库 HEAD，origin/master）
+打包时间: 2026-11-02 16:03:07 +0900
+Python: CPython 3.13.5（wheels 标签见 wheels/WHEELS.txt）
+打包脚本: 引擎仓库 scripts/build_bundle.sh（本目录由它生成）
+最小运行集分析: 引擎仓库 data/reports/kg_K178_glm.md（K178；方法与验证见报告）；日文包见 data/reports/kg_K183_glm.md（K183）

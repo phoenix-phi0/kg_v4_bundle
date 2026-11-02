@@ -1,0 +1,19 @@
+Python: CPython 3.13.5
+平台: Linux x86_64，wheel 标签见文件名（cp3xx manylinux 为二进制，py3-none-any 为纯 Python）
+pip: pip 25.1.1
+换平台/Python 版本：联网机上 pip download -r requirements.txt -d wheels/ 换掉本目录
+WHEELS.txt
+blinker-1.9.0-py3-none-any.whl
+certifi-2026.10.23-py3-none-any.whl
+charset_normalizer-3.5.2-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
+click-8.5.0-py3-none-any.whl
+flask-3.1.3-py3-none-any.whl
+idna-3.20-py3-none-any.whl
+itsdangerous-2.2.0-py3-none-any.whl
+jinja2-3.1.6-py3-none-any.whl
+markupsafe-3.0.4-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
+pypdf-6.21.4-py3-none-any.whl
+pyyaml-6.0.3-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
+requests-2.34.2-py3-none-any.whl
+urllib3-2.8.0-py3-none-any.whl
+werkzeug-3.1.9-py3-none-any.whl

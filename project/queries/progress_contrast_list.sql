@@ -1,0 +1,1 @@
+SELECT a_code, b_code FROM kg_contrast WHERE subject_id = CAST(:subject_id AS INTEGER) AND a_code IN (SELECT code FROM kg_point WHERE subject_id = CAST(:subject_id AS INTEGER)) AND b_code IN (SELECT code FROM kg_point WHERE subject_id = CAST(:subject_id AS INTEGER)) ORDER BY id ASC

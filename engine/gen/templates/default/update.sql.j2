@@ -1,0 +1,3 @@
+{#- 更新。主键从界面的 state 来（自增时）或是表单字段。 -#}
+{% extends "@_base/update.sql.j2" %}
+{% block note %}。{{ e | 主键 }} {% if e | 主键自增 %}从界面的 state 来（列表跳转时存进去的）{% else %}是表单字段{% endif %}。{% endblock %}
